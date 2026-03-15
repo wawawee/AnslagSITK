@@ -46,13 +46,18 @@ export class MemoryService {
    * Updates a core memory file
    */
   static async writeFile(filename, content) {
-    const filePath = path.join(AGENT_DIR, filename);
-    await fs.writeFile(filePath, content, 'utf-8');
-
     // If it's MEMORY.md, we might want to sync with Qdrant
     if (filename === 'MEMORY.md' && qdrantClient) {
       this.syncToQdrant('memory-curated', content);
     }
+
+    if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+      console.log(`Skipping local file write for ${filename} on Vercel`);
+      return;
+    }
+
+    const filePath = path.join(AGENT_DIR, filename);
+    await fs.writeFile(filePath, content, 'utf-8');
   }
 
   /**
@@ -60,8 +65,18 @@ export class MemoryService {
    */
   static async logEpisodic(message, metadata = {}) {
     const today = new Date().toISOString().split('T')[0];
-    const logFile = path.join(MEMORY_DIR, `${today}.md`);
 
+    // Sync to Qdrant if available
+    if (qdrantClient) {
+      this.syncToQdrant('memory-episodic', message, { ...metadata, date: today });
+    }
+
+    if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+      console.log('Skipping local episodic log write on Vercel');
+      return;
+    }
+
+    const logFile = path.join(MEMORY_DIR, `${today}.md`);
     const timestamp = new Date().toLocaleTimeString();
     const logEntry = `\n### [${timestamp}] ${message}\n- **Metadata**: ${JSON.stringify(metadata)}\n`;
 
@@ -71,11 +86,6 @@ export class MemoryService {
       // Create file if it doesn't exist
       const header = `---\ndate: ${today}\ntype: episodic-log\n---\n# Episodic Log - ${today}\n`;
       await fs.writeFile(logFile, header + logEntry, 'utf-8');
-    }
-
-    // Sync to Qdrant if available
-    if (qdrantClient) {
-      this.syncToQdrant('memory-episodic', message, { ...metadata, date: today });
     }
   }
 
