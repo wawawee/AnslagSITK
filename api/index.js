@@ -1,217 +1,171 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import axios from 'axios';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import express from 'express';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { MemoryService } from './services/memoryService.js';
 
-dotenv.config();
+// ... existing code ...
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const app = express();
-const PORT = process.env.PORT || 3001;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Google Gemini configuration
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || '');
-
-// Model IDs from 2026/SITK Standard
-const MODEL_PRO = "gemini-3.1-pro-preview";
-const MODEL_FLASH = "gemini-3-flash-preview";
-const MODEL_FALLBACK = "gemini-flash-lite-latest";
-
-const modelPro = genAI.getGenerativeModel({ model: MODEL_PRO });
-const modelFlash = genAI.getGenerativeModel({ model: MODEL_FLASH });
-const modelFallback = genAI.getGenerativeModel({ model: MODEL_FALLBACK });
-
-// Helper for robust content generation with fallback
-async function generateWithFallback(modelObj, prompt, fallbackModelObj) {
+// Endpoint to get a memory file
+app.get('/api/memory/:filename', async (req, res) => {
   try {
-    const result = await modelObj.generateContent(prompt);
-    return result.response.text();
-  } catch (err) {
-    console.warn(`Primary model failed, falling back: ${err.message}`);
-    if (fallbackModelObj) {
-      const result = await fallbackModelObj.generateContent(prompt);
-      return result.response.text();
-    }
-    throw err;
-  }
-}
-
-
-// Browser Use API configuration
-const BROWSER_USE_API_KEY = process.env.BROWSER_USE_API_KEY || 'bu_tGoTZEli69AWqEjxJFjDlF1eCiuEtXD0P1Gox9dsOFA';
-const BROWSER_USE_BASE_URL = 'https://api.browser-use.com/api/v3';
-
-// Helper to run browser task
-async function runBrowserCommand(task) {
-  const response = await axios.post(
-    `${BROWSER_USE_BASE_URL}/run`,
-    { task, model: MODEL_FLASH },
-    {
-      headers: {
-        'x-api-key': BROWSER_USE_API_KEY,
-        'Content-Type': 'application/json'
-      }
-    }
-  );
-  return response.data;
-}
-
-
-// Deep Search Endpoint utilizing Gemini + Browser Use
-app.post('/api/deep-search', async (req, res) => {
-  try {
-    const { query } = req.body;
-
-    // Step 1: Brain (Gemini 3.1 Pro) creates a research plan
-    const planPrompt = `Du är en expert på att hitta forskningsanslag och projektmedel i Sverige.
-Användaren vill hitta: "${query}" för Sandvikens IT Kår (SITK).
-
-Skapa en detaljerad sökplan med 3 specifika sökinstruktioner för en webbläsar-agent som söker på svenska myndigheters och organisationers webbplatser.
-Varje instruktion ska vara fokuserad på en specifik typ av källa (t.ex. Vinnova, Tillväxtverket, Region Gävleborg).
-Returnera instruktionerna som en JSON-array med strängar. Exempel: ["Sök hos Vinnova efter...", "Kolla Tillväxtverkets utlysningar för...", "..."]`;
-
-    const planText = await generateWithFallback(modelPro, planPrompt, modelFallback);
-    let searchSteps = [];
-    try {
-      // Clean potential markdown formatting
-      const jsonMatch = planText.match(/\[.*\]/s);
-      searchSteps = JSON.parse(jsonMatch ? jsonMatch[0] : planText);
-    } catch (e) {
-      console.error('Failed to parse plan:', planText);
-      searchSteps = [query]; // Fallback to just the query
-    }
-
-    // Step 2: Execution (Deep search loop)
-    const results = [];
-    for (const step of searchSteps.slice(0, 3)) { // Limit to 3 steps for now
-      console.log(`Executing search step: ${step}`);
-      try {
-        const browserResult = await runBrowserCommand(step);
-        results.push({ step, output: browserResult.output || browserResult.result || 'No results' });
-      } catch (err) {
-        console.error(`Browser task failed for step "${step}":`, err.message);
-        results.push({ step, error: err.message });
-      }
-    }
-
-    // Step 3: Synthesis (Gemini 3.1 Pro) summarizes the findings
-    const synthesisPrompt = `Du har genomfört en djup research-loop för sökningen: "${query}"
-
-Här är resultaten från webbläsar-agenten:
-${JSON.stringify(results, null, 2)}
-
-Sammanställ en professionell lista över de mest relevanta utlysningarna du hittat. Använd markdown-rubriker (##) för varje utlysning så att de kan extraheras korrekt.
-
-För varje utlysning (i en egen sektion som börjar med ## Namn), inkludera:
-## [Namn på utlysningen]
-- **Finansiär**: [Namn]
-- **Deadline**: [Datum]
-- **Maxbelopp**: [Summa]
-- **Beskrivning**: [Kort text om utlysningen och varför den passar SITK]
-- **URL**: [Länk]
-
-Avsluta med en sammanfattande rekommendation. Skriv på professionell svenska. Om inga relevanta utlysningar hittades, förklara varför.`;
-
-    const synthesisText = await generateWithFallback(modelPro, synthesisPrompt, modelFallback);
-
-    res.json({
-      success: true,
-      plan: searchSteps,
-      rawResults: results,
-      synthesis: synthesisText
-    });
-
+    const content = await MemoryService.readFile(req.params.filename);
+    if (content === null) return res.status(404).json({ error: 'File not found' });
+    res.json({ content });
   } catch (error) {
-    console.error('Deep search error:', error.message);
-    res.status(500).json({ error: 'Failed to perform deep search' });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Proxy endpoint for Browser Use API - Run task
-app.post('/api/browser-use/run', async (req, res) => {
+// Endpoint to update a memory file
+app.post('/api/memory/:filename', async (req, res) => {
   try {
-    const { task } = req.body;
-    const data = await runBrowserCommand(task);
-    res.json(data);
+    await MemoryService.writeFile(req.params.filename, req.body.content);
+    res.json({ success: true });
   } catch (error) {
-    console.error('Browser Use API error:', error.response?.data || error.message);
-    res.status(error.response?.status || 500).json({
-      error: error.response?.data?.message || 'Failed to run browser task'
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Proxy endpoint for Browser Use API - Create session
-app.post('/api/browser-use/sessions', async (req, res) => {
+// Endpoint to search memory
+app.post('/api/memory/search', async (req, res) => {
   try {
-    const response = await axios.post(
-      `${BROWSER_USE_BASE_URL}/sessions`,
-      req.body,
-      {
-        headers: {
-          'x-api-key': BROWSER_USE_API_KEY,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    res.json(response.data);
+    const results = await MemoryService.searchMemory(req.body.query, req.body.collection);
+    res.json({ results });
   } catch (error) {
-    console.error('Browser Use API error:', error.response?.data || error.message);
-    res.status(error.response?.status || 500).json({
-      error: error.response?.data?.message || 'Failed to create session'
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Proxy endpoint for Browser Use API - Send message to session
-app.post('/api/browser-use/sessions/:sessionId/messages', async (req, res) => {
+// Endpoint to list recent logs
+app.get('/api/memory/logs', async (req, res) => {
   try {
-    const { sessionId } = req.params;
-    const response = await axios.post(
-      `${BROWSER_USE_BASE_URL}/sessions/${sessionId}/messages`,
-      req.body,
-      {
-        headers: {
-          'x-api-key': BROWSER_USE_API_KEY,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    res.json(response.data);
+    // For now, return the current day's log content as a simplified list
+    const today = new Date().toISOString().split('T')[0];
+    const content = await MemoryService.readFile(`memory/${today}.md`);
+    res.json({ content: content || '# Inga loggar för idag än.' });
   } catch (error) {
-    console.error('Browser Use API error:', error.response?.data || error.message);
-    res.status(error.response?.status || 500).json({
-      error: error.response?.data?.message || 'Failed to send message'
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // Specialized discovery endpoint with multi-step research loop
 app.post('/api/discover-grants', async (req, res) => {
+  const taskId = `disc-${Date.now()}`;
+  discoveryTasks.set(taskId, {
+    id: taskId,
+    status: 'Initializing',
+    logs: [],
+    result: null,
+    completed: false
+  });
+
+  // Run in "background" and return taskId
+  (async () => {
+    try {
+      const { query } = req.body;
+
+      // Inject knowledge from durable memory
+      const durableMemory = await MemoryService.readFile('MEMORY.md');
+      const agentDirectives = await MemoryService.readFile('AGENTS.md');
+
+      await MemoryService.logEpisodic(`Startad ny lead discovery: "${query}"`);
+      updateTaskStatus(taskId, 'Planerar sökstrategi baserat på AGENTS.md och MEMORY.md...');
+
+      // Step 1: Planning
+      const planPrompt = `Du är en expert på att hitta nischade och regionala forskningsanslag i Sverige.
+Här är dina instruktioner (AGENTS.md):
+${agentDirectives}
+
+Här är din kännedom om SITK (MEMORY.md):
+${durableMemory}
+
+Användaren vill hitta FLER leads för projektmedel med start eller huvudfokus på 2026.
+Skapa en sökplan med 4 specifika, distinkta sökinstruktioner.
+Returnera instruktionerna som en JSON-array med strängar. Var så specifik som möjligt.`;
+
+      const planText = await generateWithFallback(modelPro, planPrompt, modelFallback);
+      let searchSteps = [];
+      try {
+        const jsonMatch = planText.match(/\[.*\]/s);
+        searchSteps = JSON.parse(jsonMatch ? jsonMatch[0] : planText);
+      } catch (e) {
+        searchSteps = ["Sök regionala projektmedel Gävleborg 2026", "Leta Vinnova AI utlysningar 2026"];
+      }
+
+      updateTaskStatus(taskId, `Sökplan skapad med ${searchSteps.length} steg.`);
+      await MemoryService.logEpisodic(`Sökplan skapad`, { steps: searchSteps });
+
+      // Step 2: Execution
+      const allResults = [];
+      for (let i = 0; i < searchSteps.length; i++) {
+        const step = searchSteps[i];
+        updateTaskStatus(taskId, `Steg ${i+1}/${searchSteps.length}: ${step}`);
+        try {
+          const browserResult = await runBrowserCommand(step, taskId);
+          allResults.push({ step, output: browserResult.output || browserResult.result || '' });
+          updateTaskStatus(taskId, `Steg ${i+1} slutfört.`);
+          await MemoryService.logEpisodic(`Genomfört söksteg: ${step}`, { status: 'success' });
+        } catch (err) {
+          updateTaskStatus(taskId, `Varning: Steg ${i+1} misslyckades: ${err.message}`);
+          await MemoryService.logEpisodic(`Söksteg misslyckades: ${step}`, { error: err.message });
+        }
+      }
+
+      // Step 3: Synthesis
+      updateTaskStatus(taskId, 'Syntetiserar och sammanställer unika leads...');
+      const synthesisPrompt = `Du har genomfört en omfattande sökning efter nya projektmedel för 2026 för SITK.
+Context (MEMORY.md): ${durableMemory}
+Här är rådata från flera sökningar:
+${JSON.stringify(allResults, null, 2)}
+
+Sammanställ en lista på 6-12 UNIKA och DEFINITIVA utlysningar.
+Varje utlysning MÅSTE ha en giltig käll-URL.
+Använd exakt detta format:
+
+## [Namn på utlysningen]
+- **Finansiär**: [Namn]
+- **Deadline**: [Datum]
+- **Maxbelopp**: [Summa]
+- **Beskrivning**: [Beskrivning]
+- **Relevans**: [Varför SITK?]
+- **URL**: [Direktlänk]
+
+Skriv på professionell svenska.`;
+
+      const finalOutput = await generateWithFallback(modelFlash, synthesisPrompt, modelFallback);
+
+      const taskObj = discoveryTasks.get(taskId);
+      taskObj.result = finalOutput;
+      taskObj.completed = true;
+      updateTaskStatus(taskId, 'Discovery slutförd! Skickar resultat till tavlan.');
+
+      // Update WORKING.md with the latest achievement
+      await MemoryService.writeFile('WORKING.md', `---
+last_updated: ${new Date().toISOString()}
+---
+# Working Memory
+Slutförde lead discovery run för "${query}". Hittade nya leads som nu är integrerade.
+Nästa steg: Analysera specifika utlysningar i detalj vid förfrågan.`);
+
+      await MemoryService.logEpisodic(`Lead discovery slutförd för "${query}"`, { leadCount: '6-12 (synthesized)' });
+
+    } catch (error) {
+      console.error('Discovery error:', error);
+      updateTaskStatus(taskId, `Fel vid discovery: ${error.message}`);
+      const taskObj = discoveryTasks.get(taskId);
+      if (taskObj) taskObj.completed = true;
+      await MemoryService.logEpisodic(`Discovery kraschade`, { error: error.message });
+    }
+  })();
+
+  res.json({ success: true, taskId });
+});
+
+// Other endpoints (Deep Search, etc.) - Simplified to keep consistent
+app.post('/api/deep-search', async (req, res) => {
   try {
     const { query } = req.body;
+    updateTaskStatus('system', `Djupsökning påbörjad: ${query}`);
 
-    // Step 1: Planning - Use Gemini 3.1 Pro to create a diverse search strategy
-    const planPrompt = `Du är en expert på att hitta nischade och regionala forskningsanslag i Sverige.
-Sandvikens IT Kår (SITK) fokuserar på AI, digitalisering, social hållbarhet och regional utveckling.
-Användaren vill hitta FLER leads för projektmedel med start eller huvudfokus på 2026.
-
-Skapa en sökplan med 4 specifika, distinkta sökinstruktioner som fokuserar på olika källor:
-1. Regionala medel (t.ex. Region Gävleborg, Region Stockholm, Länsstyrelsen Gävleborg)
-2. Statliga nischade medel (t.ex. Energimyndigheten, Vinnova - särskilt program för AI/digitalisering, Post- och telestyrelsen)
-3. Privata stiftelser (t.ex. Arvsfonden, Postkodstiftelsen, Familjen Kamprads stiftelse)
-4. EU-program anpassade för svenska aktörer (t.ex. Digital Europe via Vinnova, Interreg, Tillväxtverkets regionalfond)
-
-Returnera instruktionerna som en JSON-array med strängar. Var så specifik som möjligt i varje sökinstruktion.`;
+    const planPrompt = `Skapa en sökplan för: "${query}" för Sandvikens IT Kår (SITK).
+Returnera JSON-array med 3 sökinstruktioner.`;
 
     const planText = await generateWithFallback(modelPro, planPrompt, modelFallback);
     let searchSteps = [];
@@ -219,128 +173,61 @@ Returnera instruktionerna som en JSON-array med strängar. Var så specifik som 
       const jsonMatch = planText.match(/\[.*\]/s);
       searchSteps = JSON.parse(jsonMatch ? jsonMatch[0] : planText);
     } catch (e) {
-      console.error('Failed to parse discovery plan:', planText);
-      searchSteps = [
-        "Sök efter regionala projektmedel för digitalisering i Gävleborg 2026",
-        "Leta efter Vinnovas utlysningar för AI i offentlig sektor 2026",
-        "Sök efter stiftelsemedel för social innovation och inkludering i Sverige",
-        "Hitta EU-medel för regional digital transformation via Tillväxtverket"
-      ];
+      searchSteps = [query];
     }
 
-    // Step 2: Execution - Run searches in parallel (or sequence to avoid rate limits)
-    const allResults = [];
-    for (const step of searchSteps.slice(0, 4)) {
-      console.log(`Discovery Step: ${step}`);
+    const results = [];
+    for (const step of searchSteps.slice(0, 3)) {
       try {
         const browserResult = await runBrowserCommand(step);
-        allResults.push({ step, output: browserResult.output || browserResult.result || '' });
+        results.push({ step, output: browserResult.output || browserResult.result || 'No results' });
       } catch (err) {
-        console.error(`Discovery step failed: ${step}`, err.message);
+        results.push({ step, error: err.message });
       }
     }
 
-    // Step 3: Synthesis - Aggregate and format as unique grants
-    const synthesisPrompt = `Du har genomfört en omfattande sökning efter nya projektmedel för 2026 för SITK.
-Här är rådata från flera sökningar:
-${JSON.stringify(allResults, null, 2)}
+    const synthesisPrompt = `Sammanställ resultaten för: "${query}"\n${JSON.stringify(results)}\nAnvänd ## [Namn] format.`;
+    const synthesisText = await generateWithFallback(modelPro, synthesisPrompt, modelFallback);
 
-Sammanställ en lista på 6-12 UNIKA och DEFINITIVA utlysningar som är relevanta för SITK:s fokus (AI, digitalisering, regional utveckling).
-Använd exakt detta format för varje utlysning (för att underlätta maskinell parsning):
-
-## [Namn på utlysningen]
-- **Finansiär**: [Namn på myndighet/organisation]
-- **Deadline**: [Datum eller "Löpande"]
-- **Maxbelopp**: [Summa]
-- **Beskrivning**: [Kort teknisk beskrivning av vad man kan söka för]
-- **Relevans**: [Kort motivering varför detta passar SITK]
-- **URL**: [Direktlänk till utlysningen]
-
-Skriv på professionell svenska. Ge endast listan. Rangordna efter strategisk relevans.`;
-
-    const finalOutput = await generateWithFallback(modelFlash, synthesisPrompt, modelFallback);
-
-    res.json({
-      success: true,
-      output: finalOutput
-    });
-
+    res.json({ success: true, plan: searchSteps, rawResults: results, synthesis: synthesisText });
   } catch (error) {
-    console.error('Discovery loop error:', error.message);
-    res.status(500).json({ error: 'Failed to complete discovery loop' });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Search grants endpoint (Legacy/Standard search)
-app.post('/api/search-grants', async (req, res) => {
+// Proxy endpoints for Browser Use API
+app.post('/api/browser-use/run', async (req, res) => {
   try {
-    const { query, filters } = req.body;
-    const searchTask = `Sök efter aktuella utlysningar för projektmedel, anslag och innovationsstöd för år 2026. Sökord: ${query || 'AI projektmedel 2026 Vinnova Tillväxtverket'}. Returnera utlysningens namn, finansiär, deadline, maxbelopp, beskrivning och länk.`;
-    const data = await runBrowserCommand(searchTask);
+    const data = await runBrowserCommand(req.body.task);
     res.json(data);
   } catch (error) {
-    console.error('Search grants error:', error.response?.data || error.message);
-    res.status(error.response?.status || 500).json({
-      error: error.response?.data?.message || 'Failed to search grants'
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Generate application draft endpoint
 app.post('/api/generate-application', async (req, res) => {
   try {
     const { grantInfo, projectInfo, sitkProfile } = req.body;
-    const prompt = `Du är en expert på att skriva bidragsansökningar för svenska innovation- och forskningsprojekt.
-Skapa ett komplett ansökningsutkast baserat på följande information.
-
-UTLYSNING: ${JSON.stringify(grantInfo)}
-PROJEKTIDÉ: ${JSON.stringify(projectInfo)}
-SÖKANDE PROFIL (SITK): ${JSON.stringify(sitkProfile)}
-
-Returnera ett JSON-objekt med exakt följande fält:
-{
-  "summary": "En säljande sammanfattning av projektet",
-  "projectDescription": "En detaljerad beskrivning av projektet, dess relevans och bakgrund",
-  "goals": "Tydliga och mätbara mål och förväntade resultat",
-  "implementation": "En genomförandeplan med tidslinje och aktiviteter",
-  "budget": "En motiverad budget och resursbehov",
-  "competence": "Beskrivning av organisationens (SITK) och partners kompetens",
-  "dissemination": "Plan för spridning och nyttiggörande av resultat"
-}
-
-Skriv på professionell svenska. Ge endast JSON-svaret.`;
-
+    const prompt = `Skriv ett ansökningsutkast för Sandvikens IT Kår.\nUTLYSNING: ${JSON.stringify(grantInfo)}\nReturnera JSON med summary, goals, etc.`;
     const text = await generateWithFallback(modelPro, prompt, modelFallback);
-    let content;
-    try {
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      content = JSON.parse(jsonMatch ? jsonMatch[0] : text);
-      res.json({ success: true, content });
-    } catch (e) {
-      console.error('Failed to parse generation output:', text);
-      res.status(500).json({ error: 'Failed to process generated content' });
-    }
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const content = JSON.parse(jsonMatch ? jsonMatch[0] : text);
+    res.json({ success: true, content });
   } catch (error) {
-    console.error('Generate application error:', error.message);
-    res.status(500).json({ error: 'Failed to generate application' });
+    res.status(500).json({ error: error.message });
   }
 });
 
-
-// Serve static files in production
+// Serve static files
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../dist')));
+  app.use(express.static(path.join(__dirname, 'dist')));
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../dist', 'index.html'));
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
   });
 }
 
-// Export the app for Vercel
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
 export default app;
-
-// Only listen if run directly (not in Vercel)
-if (process.env.NODE_ENV !== 'production' && import.meta.url === `file://${process.argv[1]}`) {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
-}

@@ -89,57 +89,69 @@ class ApiService {
     }
   }
 
-  // Targeted discovery for finding MORE leads
-  async discoverMoreGrants(existingCount: number = 0): Promise<Grant[]> {
+  // Targeted discovery for finding MORE leads with verbose status updates
+  async discoverMoreGrants(
+    onStatusUpdate?: (status: string, logs: { timestamp: string; message: string }[]) => void,
+    existingCount: number = 0
+  ): Promise<Grant[]> {
     try {
-      // Use the new multi-step discovery endpoint
-      const result = await this.fetch<{ output: string }>('/api/discover-grants', {
+      // Step 1: Start the discovery task
+      const startResult = await this.fetch<{ success: boolean; taskId: string }>('/api/discover-grants', {
         method: 'POST',
         body: JSON.stringify({ query: 'new leads' }),
       });
 
-      const rawOutput = result.output;
-      console.log('Discovery raw output:', rawOutput);
-      const newGrants = this.parseGrantsFromOutput(rawOutput);
+      const taskId = startResult.taskId;
+      console.log(`Discovery started with Task ID: ${taskId}`);
 
-      // Ensure unique IDs based on timestamp to avoid collisions
-      return newGrants.map((g, i) => ({
-        ...g,
-        id: `discovered-${Date.now()}-${i + existingCount}`
-      }));
+      // Step 2: Poll for status updates
+      return new Promise((resolve, reject) => {
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusResult = await this.fetch<{
+              id: string;
+              status: string;
+              logs: { timestamp: string; message: string }[];
+              result: string | null;
+              completed: boolean;
+            }>(`/api/discovery-status/${taskId}`);
+
+            if (onStatusUpdate) {
+              onStatusUpdate(statusResult.status, statusResult.logs);
+            }
+
+            if (statusResult.completed) {
+              clearInterval(pollInterval);
+              if (statusResult.result) {
+                const newGrants = this.parseGrantsFromOutput(statusResult.result);
+                // Ensure unique IDs based on timestamp to avoid collisions
+                const uniqueGrants = newGrants.map((g, i) => ({
+                  ...g,
+                  id: `discovered-${Date.now()}-${i + existingCount}`
+                }));
+                resolve(uniqueGrants);
+              } else {
+                resolve([]);
+              }
+            }
+          } catch (err) {
+            clearInterval(pollInterval);
+            console.error('Polling error:', err);
+            reject(err);
+          }
+        }, 2000); // Poll every 2 seconds
+      });
+
     } catch (error) {
       console.error('Discover more grants error:', error);
-      // Fallback: return a few "new" mock grants if discovery fails
-      return [
-        {
-          id: `mock-disc-${Date.now()}-1`,
-          name: 'Regional Innovationskraft Gävleborg',
-          funder: 'Region Gävleborg',
-          deadline: '2026-06-01',
-          maxAmount: '800 000 kr',
-          description: 'Utvecklingsprojekt för ökad digital mognad hos SMF och civilsamhället i regionen.',
-          url: 'https://regiongavleborg.se',
-          category: 'region',
-          status: 'open',
-        },
-        {
-          id: `mock-disc-${Date.now()}-2`,
-          name: 'AI för klimatet',
-          funder: 'Energimyndigheten',
-          deadline: '2026-09-15',
-          maxAmount: '2 500 000 kr',
-          description: 'Forskning och innovation med fokus på AI-tillämpningar som minskar utsläpp eller optimerar resursanvändning.',
-          url: 'https://energimyndigheten.se',
-          category: 'other',
-          status: 'open',
-        }
-      ];
+      // Fallback: return empty if discovery fails completely
+      return [];
     }
   }
 
   // Generate application draft
   async generateApplication(grantInfo: Grant, projectInfo: ProjectInfo, sitkProfile: SITKProfile): Promise<ApplicationDraft> {
-    const response = await this.fetch<{ success: boolean; content: any }>('/api/generate-application', {
+    const response = await this.fetch<{ success: boolean; content: Record<string, unknown> }>('/api/generate-application', {
       method: 'POST',
       body: JSON.stringify({ grantInfo, projectInfo, sitkProfile }),
     });
@@ -148,7 +160,7 @@ class ApiService {
       id: `draft-${Date.now()}`,
       grantId: grantInfo.id,
       projectInfo,
-      content: response.content,
+      content: response.content as ApplicationDraft['content'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -323,6 +335,54 @@ class ApiService {
         category: 'other',
         status: 'open',
       },
+      {
+        id: 'exp-1',
+        name: 'Göranssonska Stiftelserna - Lokalt projektstöd 2026',
+        funder: 'Göranssonska Stiftelserna',
+        deadline: '2026-02-15',
+        maxAmount: 'Upp till 1 000 000 kr',
+        description: 'Stöd till lokala föreningar och projekt i Sandviken med omnejd. Fokus på social sammanhållning och utveckling.',
+        url: 'https://www.goranssonskastiftelserna.se',
+        relevance: 'Vår kärnfinansiär i Sandviken. Perfekt för regionala AI-initiativ.',
+        category: 'region',
+        status: 'open',
+      },
+      {
+        id: 'exp-2',
+        name: 'Digitalisering för hållbar tillväxt',
+        funder: 'Tillväxtverket',
+        deadline: '2026-05-10',
+        maxAmount: '2 500 000 kr',
+        description: 'Insatser som stärker digital mognad och hållbar innovation hos SMF.',
+        url: 'https://tillvaxtverket.se',
+        relevance: 'Matchar SITK:s fokus på regional digital transformation.',
+        category: 'tillvaxtverket',
+        status: 'open',
+      },
+      {
+        id: 'exp-3',
+        name: 'Innovationscheckar Gävleborg 2026',
+        funder: 'Region Gävleborg',
+        deadline: 'Löpande till juni 2026',
+        maxAmount: '100 000 - 250 000 kr',
+        description: 'Små checkar för att verifiera tekniska lösningar eller affärsidéer.',
+        url: 'https://regiongavleborg.se',
+        relevance: 'Låg tröskel för att testa nya AI-idéer i länet.',
+        category: 'region',
+        status: 'open',
+      },
+      {
+        id: 'exp-4',
+        name: 'AI i offentlig sektor - Utlysning 2026',
+        funder: 'Vinnova',
+        deadline: '2026-03-20',
+        maxAmount: '4 000 000 kr',
+        description: 'Avancerad digitalisering genom tillämpad AI i välfärden.',
+        url: 'https://vinnova.se',
+        relevance: 'Kärnan i SITK:s tekniska expertis.',
+        category: 'vinnova',
+        status: 'closing_soon',
+      }
     ];
   }
 }

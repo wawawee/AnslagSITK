@@ -1,5 +1,6 @@
 import { Login } from '@/components/Login';
 import { Toaster } from '@/components/ui/sonner';
+import { AgentIntelligence } from '@/sections/AgentIntelligence';
 import { ApplicationWriter } from '@/sections/ApplicationWriter';
 import { DraftsList } from '@/sections/DraftsList';
 import { GrantSearch } from '@/sections/GrantSearch';
@@ -51,6 +52,10 @@ function App() {
 
         {activeTab === 'drafts' && (
           <DraftsList />
+        )}
+
+        {activeTab === 'intelligence' && (
+          <AgentIntelligence />
         )}
       </main>
 

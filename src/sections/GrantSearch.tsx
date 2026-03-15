@@ -46,6 +46,8 @@ export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
   const [selectedGrant, setSelectedGrant] = useState<Grant | null>(null);
   const [deepSearchSynthesis, setDeepSearchSynthesis] = useState<string | null>(null);
   const [researchSteps, setResearchSteps] = useState<string[]>([]);
+  const [discoveryLogs, setDiscoveryLogs] = useState<{ timestamp: string; message: string }[]>([]);
+  const [discoveryStatus, setDiscoveryStatus] = useState<string>('');
 
   // Load grants on mount
   useState(() => {
@@ -117,21 +119,35 @@ export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
 
   const handleDiscoverMore = async () => {
     setDiscovering(true);
+    setDiscoveryLogs([]);
+    setDiscoveryStatus('Påbörjar sökning...');
     toast.info('Söker efter ytterligare finansieringsleads...');
+
     try {
-      const moreGrants = await apiService.discoverMoreGrants(grants.length);
-      setGrants(prev => {
-        const existingIds = new Set(prev.map(g => g.id));
-        const newUniqueResults = moreGrants.filter(g => !existingIds.has(g.id));
-        const updated = [...prev, ...newUniqueResults];
-        apiService.saveDiscoveredGrants(updated);
-        return updated;
-      });
-      toast.success(`Upptäckte ${moreGrants.length} nya leads!`);
+      const moreGrants = await apiService.discoverMoreGrants((status, logs) => {
+        setDiscoveryStatus(status);
+        setDiscoveryLogs(logs);
+      }, grants.length);
+
+      if (moreGrants.length > 0) {
+        setGrants(prev => {
+          const existingIds = new Set(prev.map(g => g.id));
+          const newUniqueResults = moreGrants.filter(g => !existingIds.has(g.id));
+          const updated = [...prev, ...newUniqueResults];
+          apiService.saveDiscoveredGrants(updated);
+          return updated;
+        });
+        toast.success(`Upptäckte ${moreGrants.length} nya leads!`);
+      } else {
+        toast.info('Inga nya unika leads hittades för tillfället.');
+      }
     } catch {
       toast.error('Kunde inte upptäcka fler leads just nu');
     } finally {
-      setDiscovering(false);
+      // Keep logs visible for a few seconds after completion
+      setTimeout(() => {
+        setDiscovering(false);
+      }, 5000);
     }
   };
 
@@ -190,6 +206,48 @@ export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
           </div>
         </div>
       </div>
+
+      {/* Discovery Logs Console */}
+      {discovering && (
+        <Card className="border-slate-800 bg-slate-900 text-slate-300 shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-4 duration-500 font-mono text-xs">
+          <CardHeader className="border-b border-slate-800 bg-slate-950/50 py-3 flex flex-row items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1.5">
+                <div className="w-2.5 h-2.5 rounded-full bg-red-500/50" />
+                <div className="w-2.5 h-2.5 rounded-full bg-amber-500/50" />
+                <div className="w-2.5 h-2.5 rounded-full bg-green-500/50" />
+              </div>
+              <span className="ml-2 font-semibold text-slate-400">Discovery Engine Log</span>
+            </div>
+            <div className="flex items-center gap-2 text-[10px] text-slate-500 uppercase tracking-widest">
+              <div className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+              Live Status: {discoveryStatus}
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 max-h-[250px] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700">
+            <div className="space-y-1">
+              {discoveryLogs.length === 0 && (
+                <div className="text-slate-500 italic">Väntar på backend...</div>
+              )}
+              {discoveryLogs.map((log, i) => (
+                <div key={i} className="flex gap-3 animate-in fade-in slide-in-from-left-2 duration-300">
+                  <span className="text-slate-600 shrink-0">[{log.timestamp.split('T')[1].substring(0, 8)}]</span>
+                  <span className={log.message.includes('Fel') ? 'text-red-400' : log.message.includes('Hittade') ? 'text-green-400' : 'text-slate-300'}>
+                    {log.message}
+                  </span>
+                </div>
+              ))}
+              <div className="flex gap-3 text-blue-400 animate-pulse mt-2">
+                 <span>&gt;</span>
+                 <span className="flex gap-1">
+                   {discoveryStatus}
+                   <span className="animate-bounce">...</span>
+                 </span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Deep Search Report */}
       {deepSearchSynthesis && (
@@ -458,46 +516,90 @@ interface GrantCardProps {
 
 function GrantCard({ grant, onSelect, onWriteApplication }: GrantCardProps) {
   return (
-    <Card className="card-hover cursor-pointer" onClick={onSelect}>
+    <Card
+      className="group relative overflow-hidden border-white/20 bg-white/5 backdrop-blur-md shadow-lg hover:shadow-2xl hover:bg-white/10 transition-all duration-500 cursor-pointer border-l-4 border-l-blue-500"
+      onClick={onSelect}
+    >
+      <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="p-2 bg-blue-500/20 rounded-full backdrop-blur-md">
+          <ExternalLink className="h-4 w-4 text-blue-400" />
+        </div>
+      </div>
+
       <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-2">
-          <Badge variant="outline" className={categoryColors[grant.category]}>
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <Badge variant="outline" className={`${categoryColors[grant.category]} backdrop-blur-md border-white/10`}>
             {categoryLabels[grant.category]}
           </Badge>
-          {statusIcons[grant.status]}
+          <div className="flex items-center gap-1">
+            {statusIcons[grant.status]}
+          </div>
         </div>
-        <CardTitle className="text-lg mt-2 line-clamp-2">{grant.name}</CardTitle>
-        <CardDescription className="flex items-center gap-1">
+        <CardTitle className="text-lg font-bold leading-tight group-hover:text-blue-400 transition-colors line-clamp-2">
+          {grant.name}
+        </CardTitle>
+        <div className="flex items-center gap-2 text-xs font-semibold text-blue-300 uppercase tracking-wider mt-1">
           <Building2 className="h-3 w-3" />
           {grant.funder}
-        </CardDescription>
+        </div>
       </CardHeader>
-      <CardContent className="pb-3">
-        <p className="text-sm text-muted-foreground line-clamp-3 mb-3">{grant.description}</p>
-        <div className="flex items-center gap-4 text-sm">
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <Calendar className="h-4 w-4" />
-            {grant.deadline}
+
+      <CardContent className="pb-3 space-y-4">
+        <p className="text-sm text-slate-400 line-clamp-3 leading-relaxed">
+          {grant.description}
+        </p>
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          <div className="flex items-center gap-1.5 text-slate-300 bg-white/5 py-1 px-2 rounded-md">
+            <Calendar className="h-3.5 w-3.5 text-blue-400" />
+            <span className="font-medium">{grant.deadline}</span>
           </div>
           {grant.maxAmount && (
-            <div className="flex items-center gap-1 text-muted-foreground">
-              <Euro className="h-4 w-4" />
-              {grant.maxAmount}
+            <div className="flex items-center gap-1.5 text-slate-300 bg-white/5 py-1 px-2 rounded-md">
+              <Euro className="h-3.5 w-3.5 text-cyan-400" />
+              <span className="font-medium">{grant.maxAmount}</span>
+            </div>
+          )}
+          {grant.url && (
+            <div className="flex items-center gap-1.5 text-blue-400/80 hover:text-blue-300 transition-colors">
+              <ExternalLink className="h-3 w-3" />
+              <span className="truncate max-w-[120px]">
+                {(() => {
+                  try {
+                    return new URL(grant.url).hostname.replace('www.', '');
+                  } catch {
+                    return 'Länk';
+                  }
+                })()}
+              </span>
             </div>
           )}
         </div>
+
+        {grant.relevance && (
+          <div className="pt-2">
+            <div className="text-[10px] font-bold text-blue-500/80 uppercase tracking-widest flex items-center gap-1 mb-1">
+              <CheckCircle2 className="h-3 w-3" />
+              SITK Match
+            </div>
+            <p className="text-[11px] text-slate-500 italic line-clamp-1">
+              "{grant.relevance}"
+            </p>
+          </div>
+        )}
       </CardContent>
-      <CardFooter>
+
+      <CardFooter className="pt-2 border-t border-white/5">
         <Button
           variant="ghost"
           size="sm"
-          className="w-full text-blue-600 hover:text-blue-800 hover:bg-blue-50"
+          className="w-full text-blue-400 hover:text-white hover:bg-blue-600/20 group-hover:bg-blue-600/10 transition-all font-bold tracking-tight"
           onClick={(e) => {
             e.stopPropagation();
             onWriteApplication();
           }}
         >
-          Skriv ansökan
+          GENERERA ANSÖKAN
         </Button>
       </CardFooter>
     </Card>
