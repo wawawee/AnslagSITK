@@ -1,4 +1,4 @@
-import type { BrowserUseResponse, DeepSearchResponse, Grant, SearchFilters } from '@/types';
+import type { ApplicationDraft, BrowserUseResponse, DeepSearchResponse, Grant, ProjectInfo, SearchFilters, SITKProfile } from '@/types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
@@ -138,11 +138,20 @@ class ApiService {
   }
 
   // Generate application draft
-  async generateApplication(grantInfo: Grant, projectInfo: Record<string, unknown>, sitkProfile: Record<string, unknown>): Promise<{ success: boolean; content: any }> {
-    return this.fetch('/api/generate-application', {
+  async generateApplication(grantInfo: Grant, projectInfo: ProjectInfo, sitkProfile: SITKProfile): Promise<ApplicationDraft> {
+    const response = await this.fetch<{ success: boolean; content: any }>('/api/generate-application', {
       method: 'POST',
       body: JSON.stringify({ grantInfo, projectInfo, sitkProfile }),
     });
+
+    return {
+      id: `draft-${Date.now()}`,
+      grantId: grantInfo.id,
+      projectInfo,
+      content: response.content,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   // Persistence management

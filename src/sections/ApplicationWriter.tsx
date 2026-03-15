@@ -92,8 +92,8 @@ export function ApplicationWriter({ selectedGrant }: ApplicationWriterProps) {
     try {
       const result = await apiService.generateApplication(
         selectedGrant,
-        projectInfo,
-        defaultSITKProfile
+        projectInfo as ProjectInfo,
+        defaultSITKProfile as SITKProfile
       );
       setDraft(result);
       toast.success('Ansökningsutkast genererat!');
