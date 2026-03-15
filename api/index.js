@@ -20,9 +20,9 @@ app.use(express.json({ limit: '10mb' }));
 // AI Model Setup
 // ====================
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || '');
-const modelPro = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
-const modelFlash = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-const modelFallback = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+const modelPro = genAI.getGenerativeModel({ model: 'gemini-3.1-pro-preview' });
+const modelFlash = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+const modelFallback = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
 
 async function generateWithFallback(primaryModel, prompt, fallbackModel) {
   try {
@@ -56,7 +56,7 @@ function updateTaskStatus(taskId, message) {
 
 // Model with Google Search Grounding enabled
 const modelSearch = genAI.getGenerativeModel({
-  model: 'gemini-2.5-flash',
+  model: 'gemini-3-flash-preview',
   tools: [{ googleSearch: {} }],
 });
 
