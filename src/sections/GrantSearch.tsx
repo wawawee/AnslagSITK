@@ -42,12 +42,9 @@ export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
   const [filters, setFilters] = useState<SearchFilters>({});
   const [grants, setGrants] = useState<Grant[]>([]);
   const [loading, setLoading] = useState(false);
-  const [discovering, setDiscovering] = useState(false);
   const [selectedGrant, setSelectedGrant] = useState<Grant | null>(null);
   const [deepSearchSynthesis, setDeepSearchSynthesis] = useState<string | null>(null);
   const [researchSteps, setResearchSteps] = useState<string[]>([]);
-  const [discoveryLogs, setDiscoveryLogs] = useState<{ timestamp: string; message: string }[]>([]);
-  const [discoveryStatus, setDiscoveryStatus] = useState<string>('');
 
   // Load grants on mount
   useState(() => {
@@ -117,39 +114,7 @@ export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
     }
   };
 
-  const handleDiscoverMore = async () => {
-    setDiscovering(true);
-    setDiscoveryLogs([]);
-    setDiscoveryStatus('Påbörjar sökning...');
-    toast.info('Söker efter ytterligare finansieringsleads...');
 
-    try {
-      const moreGrants = await apiService.discoverMoreGrants((status, logs) => {
-        setDiscoveryStatus(status);
-        setDiscoveryLogs(logs);
-      }, grants.length);
-
-      if (moreGrants.length > 0) {
-        setGrants(prev => {
-          const existingIds = new Set(prev.map(g => g.id));
-          const newUniqueResults = moreGrants.filter(g => !existingIds.has(g.id));
-          const updated = [...prev, ...newUniqueResults];
-          apiService.saveDiscoveredGrants(updated);
-          return updated;
-        });
-        toast.success(`Upptäckte ${moreGrants.length} nya leads!`);
-      } else {
-        toast.info('Inga nya unika leads hittades för tillfället.');
-      }
-    } catch {
-      toast.error('Kunde inte upptäcka fler leads just nu');
-    } finally {
-      // Keep logs visible for a few seconds after completion
-      setTimeout(() => {
-        setDiscovering(false);
-      }, 5000);
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -207,47 +172,7 @@ export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
         </div>
       </div>
 
-      {/* Discovery Logs Console */}
-      {discovering && (
-        <Card className="border-slate-800 bg-slate-900 text-slate-300 shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-4 duration-500 font-mono text-xs">
-          <CardHeader className="border-b border-slate-800 bg-slate-950/50 py-3 flex flex-row items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="flex gap-1.5">
-                <div className="w-2.5 h-2.5 rounded-full bg-red-500/50" />
-                <div className="w-2.5 h-2.5 rounded-full bg-amber-500/50" />
-                <div className="w-2.5 h-2.5 rounded-full bg-green-500/50" />
-              </div>
-              <span className="ml-2 font-semibold text-slate-400">Discovery Engine Log</span>
-            </div>
-            <div className="flex items-center gap-2 text-[10px] text-slate-500 uppercase tracking-widest">
-              <div className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
-              Live Status: {discoveryStatus}
-            </div>
-          </CardHeader>
-          <CardContent className="p-4 max-h-[250px] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700">
-            <div className="space-y-1">
-              {discoveryLogs.length === 0 && (
-                <div className="text-slate-500 italic">Väntar på backend...</div>
-              )}
-              {discoveryLogs.map((log, i) => (
-                <div key={i} className="flex gap-3 animate-in fade-in slide-in-from-left-2 duration-300">
-                  <span className="text-slate-600 shrink-0">[{log.timestamp.split('T')[1].substring(0, 8)}]</span>
-                  <span className={log.message.includes('Fel') ? 'text-red-400' : log.message.includes('Hittade') ? 'text-green-400' : 'text-slate-300'}>
-                    {log.message}
-                  </span>
-                </div>
-              ))}
-              <div className="flex gap-3 text-blue-400 animate-pulse mt-2">
-                 <span>&gt;</span>
-                 <span className="flex gap-1">
-                   {discoveryStatus}
-                   <span className="animate-bounce">...</span>
-                 </span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+
 
       {/* Deep Search Report */}
       {deepSearchSynthesis && (
@@ -340,24 +265,6 @@ export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
           </Select>
         </div>
 
-        <Button
-          onClick={handleDiscoverMore}
-          disabled={discovering || loading}
-          variant="outline"
-          className="border-blue-200 text-blue-700 hover:bg-blue-50 bg-white/50 backdrop-blur-sm"
-        >
-          {discovering ? (
-            <div className="flex items-center gap-2">
-              <Clock className="h-4 w-4 animate-spin" />
-              Upptäcker leads...
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <AlertCircle className="h-4 w-4" />
-              Hitta fler leads
-            </div>
-          )}
-        </Button>
       </div>
 
       {/* Results */}
