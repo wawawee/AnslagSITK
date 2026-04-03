@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { Textarea } from '@/components/ui/textarea';
 import { apiService } from '@/services/api';
-import type { ApplicationDraft, Grant, ProjectInfo, SITKProfile } from '@/types';
+import type { ApplicationDraft, Grant, ProjectInfo, OrgProfile } from '@/types';
 import { BookOpen, Building2, Calendar, ChevronLeft, ChevronRight, Clock, Download, Euro, FileText, Lightbulb, Save, Share2, Sparkles, Target, Users, Wallet, Wand2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -15,27 +15,19 @@ interface ApplicationWriterProps {
   selectedGrant: Grant | null;
 }
 
-const defaultSITKProfile: SITKProfile = {
-  name: 'SITK (Sandvikens IT Kår)',
-  description: 'En aktör i Sandviken som utvecklar AI-lösningar för att effektivisera och stötta offentliga enheter, lokalt näringsliv och föreningsliv.',
+const defaultOrgProfile: OrgProfile = {
+  name: 'SITK (Sandvikens IT Kår) / AI Startup',
+  description: 'Vi utvecklar AI-lösningar för att effektivisera verksamheter och skapa värde.',
   focusAreas: [
-    'Offentliga/kommunala enheter',
-    'Lokalt näringsliv och SMF',
-    'Föreningsliv och civilsamhälle',
+    'AI för effektivisering',
+    'Offentliga enheter och näringsliv'
   ],
   strengths: [
-    'Samarbete med Sandbacka Science Park',
-    'Fokus på praktisk implementering av AI',
-    'Expertis inom "Gemensamma AI-förmågor"',
-    'Regional förankring i Gävleborg',
+    'Praktisk AI-implementering',
+    'Innovation och teknik'
   ],
-  partnerships: [
-    'Sandbacka Science Park',
-    'Sandvikens kommun',
-    'Region Gävleborg',
-    'Lokala näringslivet',
-  ],
-  region: 'Gävleborg / Norra Mellansverige',
+  partnerships: [],
+  region: 'Sverige',
 };
 
 const steps = [
@@ -64,22 +56,30 @@ export function ApplicationWriter({ selectedGrant }: ApplicationWriterProps) {
     partners: [],
   });
 
-  // Generate a complete project proposal based on the grant and SITK profile
-  const generateProjectProposal = () => {
+  const [proposals, setProposals] = useState<ProjectInfo[]>([]);
+  const [profile, setProfile] = useState<OrgProfile>(defaultOrgProfile);
+
+  const generateProjectProposal = async () => {
     if (!selectedGrant) {
       toast.error('Välj en utlysning först');
       return;
     }
 
     setGenerating(true);
-
-    // Simulate AI generation delay
-    setTimeout(() => {
-      const proposal = createProjectProposal(selectedGrant, defaultSITKProfile);
-      setProjectInfo(proposal);
-      toast.success('Projektförslag genererat! Granska och justera efter behov.');
+    try {
+      const generated = await apiService.generateProposals(selectedGrant, profile, 2);
+      if (generated && generated.length > 0) {
+        setProposals(generated);
+        setProjectInfo(generated[0]);
+        toast.success('Projektförslag genererade!');
+      } else {
+        toast.error('Kunde inte generera förslag');
+      }
+    } catch (error) {
+      toast.error('Fel vid generering');
+    } finally {
       setGenerating(false);
-    }, 1500);
+    }
   };
 
   const generateDraft = async () => {
@@ -93,7 +93,7 @@ export function ApplicationWriter({ selectedGrant }: ApplicationWriterProps) {
       const result = await apiService.generateApplication(
         selectedGrant,
         projectInfo as ProjectInfo,
-        defaultSITKProfile as SITKProfile
+        profile
       );
       setDraft(result);
       toast.success('Ansökningsutkast genererat!');
@@ -170,7 +170,23 @@ ${draft.content.dissemination}
 
   return (
     <div className="space-y-6">
-      {/* Grant Info Banner */}
+      {/* Profil-inställning (enkel för nu) */}
+      <Card className="bg-muted/30">
+        <CardHeader>
+          <CardTitle className="text-sm">Din Organisationsprofil (Redigera vid behov)</CardTitle>
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <Label>Namn</Label>
+            <Input value={profile.name} onChange={e => setProfile({...profile, name: e.target.value})} />
+          </div>
+          <div>
+            <Label>Kort Beskrivning</Label>
+            <Input value={profile.description} onChange={e => setProfile({...profile, description: e.target.value})} />
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="bg-gradient-to-r from-blue-600 to-cyan-500 rounded-2xl p-6 text-white">
         <div className="flex items-start justify-between">
           <div>
@@ -198,7 +214,6 @@ ${draft.content.dissemination}
         </div>
       </div>
 
-      {/* Progress */}
       <div className="space-y-2">
         <div className="flex justify-between text-sm">
           <span className="font-medium">{steps[currentStep].label}</span>
@@ -207,7 +222,6 @@ ${draft.content.dissemination}
         <Progress value={progress} className="h-2" />
       </div>
 
-      {/* Step Navigation */}
       <div className="flex flex-wrap gap-2">
         {steps.map((step, index) => {
           const Icon = step.icon;
@@ -226,7 +240,6 @@ ${draft.content.dissemination}
         })}
       </div>
 
-      {/* Step Content */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -247,6 +260,8 @@ ${draft.content.dissemination}
               onChange={setProjectInfo}
               onGenerateProposal={generateProjectProposal}
               generating={generating}
+              proposals={proposals}
+              onSelectProposal={setProjectInfo}
             />
           )}
           {currentStep > 0 && draft && (
@@ -276,7 +291,6 @@ ${draft.content.dissemination}
         </CardContent>
       </Card>
 
-      {/* Navigation Buttons */}
       <div className="flex justify-between">
         <Button
           variant="outline"
@@ -316,82 +330,8 @@ ${draft.content.dissemination}
           </Button>
         </div>
       </div>
-
-      {/* SITK Profile Card */}
-      <Card className="bg-muted/50">
-        <CardHeader>
-          <CardTitle className="text-sm">SITK-profil (används i ansökan)</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          <p className="mb-2"><strong>{defaultSITKProfile.name}</strong></p>
-          <p className="mb-2">{defaultSITKProfile.description}</p>
-          <div className="flex flex-wrap gap-1">
-            {defaultSITKProfile.strengths.map((strength, i) => (
-              <Badge key={i} variant="secondary" className="text-xs">
-                {strength}
-              </Badge>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
-}
-
-// Create a project proposal based on grant type and SITK profile
-function createProjectProposal(grant: Grant, profile: SITKProfile): ProjectInfo {
-  const grantCategory = grant.category;
-
-  // Base proposals for different grant categories
-  const proposals: Record<string, ProjectInfo> = {
-    vinnova: {
-      title: 'Gemensamma AI-förmågor för offentlig sektor - En praktisk implementering i Sandvikens kommun',
-      description: `Projektet syftar till att utveckla och implementera AI-baserade lösningar som effektiviserar och förbättrar verksamheten hos offentliga aktörer i Sandviken och Gävleborgsregionen. Genom samarbete med ${profile.partnerships[0]} och ${profile.partnerships[1]} skapar vi en modell för praktisk AI-implementering som kan skalas till andra kommuner.
-
-Projektet fokuserar på att utveckla "Gemensamma AI-förmågor" - en plattform och metodik för att dela AI-lösningar, data och kompetens mellan olika offentliga organisationer. Detta minskar dubbelarbete och maximerar nyttan av varje investering i AI.`,
-      goals: 'Utveckla och implementera minst tre praktiska AI-lösningar inom kommunal verksamhet. Bygga en plattform för delning av AI-förmågor mellan kommuner. Utbilda minst 50 tjänstemän i AI-användning. Skapa en modell för hållbar drift och vidareutveckling. Mäta och dokumentera effektiviseringsvinster.',
-      targetGroup: 'Kommunala tjänstemän och handläggare inom Sandvikens kommun och intresserade kommuner i Gävleborgsregionen',
-      budget: grant.maxAmount || '3 000 000',
-      timeline: '18 månader (januari 2026 - juni 2027)',
-      partners: ['Sandvikens kommun', 'Sandbacka Science Park', 'Region Gävleborg'],
-    },
-    tillvaxtverket: {
-      title: 'AI för lokal tillväxt - Digital transformation av SMF i Gävleborg',
-      description: `Projektet ska stötta små och medelstora företag i Gävleborgsregionen att införa AI-teknik för att öka sin konkurrenskraft och effektivisera sin verksamhet. Genom ${profile.name} och vårt samarbete med ${profile.partnerships[0]} erbjuder vi kostnadsfri rådgivning, utbildning och praktisk implementeringsstöd.
-
-Vi fokuserar särskilt på att hjälpa företag att använda AI för automatisering av administrativa uppgifter, förbättrad kundkommunikation och datadriven beslutsfattning. Projektet bidrar till regionens mål om ökad digital mognad och stärkt innovationskraft.`,
-      goals: 'Stötta minst 30 SMF med AI-rådgivning och implementering. Genomföra 10 AI-workshops för företagare. Skapa en regional AI-hub för kunskapsdelning. Dokumentera och sprida best practices. Bygga långsiktiga samarbeten mellan företag och AI-experter.',
-      targetGroup: 'Små och medelstora företag (SMF) i Gävleborgsregionen, särskilt inom tillverkning, tjänster och handel',
-      budget: grant.maxAmount || '2 500 000',
-      timeline: '24 månader (mars 2026 - februari 2028)',
-      partners: ['Sandbacka Science Park', 'Almi Gävleborg', 'Företagarna Gävleborg'],
-    },
-    eu: {
-      title: 'Digital Europe Deployment - AI för offentlig effektivisering och grön omställning',
-      description: `Detta projekt kombinerar digital transformation med grön omställning genom att implementera AI-lösningar som både effektiviserar offentlig verksamhet och minskar miljöpåverkan. ${profile.name} leder arbetet med att utveckla AI-verktyg för resursoptimering, prediktivt underhåll och hållbarhetsrapportering.
-
-Projektet är en del av Double Transition-satsningen och skapar en modell för hur offentliga organisationer kan använda AI för att uppnå både digitala och miljömässiga mål. Resultaten sprids inom EU:s Digital Europe-program.`,
-      goals: 'Implementera AI-lösningar som minskar resursförbrukning med minst 15%. Utveckla verktyg för automatiserad hållbarhetsrapportering. Skapa en EU-spridd playbook för AI-driven grön omställning. Utbilda europeiska kommuner i projektets metoder.',
-      targetGroup: 'Offentliga organisationer i Sverige och EU som vill kombinera digitalisering med miljömål',
-      budget: grant.maxAmount || '€500 000',
-      timeline: '36 månader (januari 2026 - december 2028)',
-      partners: ['Sandvikens kommun', 'Sandbacka Science Park', 'DIGG', 'Internationella kommunnätverk'],
-    },
-    other: {
-      title: 'AI för social innovation - Stärkt civilsamhälle och föreningsliv',
-      description: `Projektet utforskar hur AI kan stötta ideella organisationer och föreningslivet att bli mer effektiva och nå fler med sin verksamhet. ${profile.name} utvecklar användarvänliga AI-verktyg som hjälper föreningar med kommunikation, medlemshantering och verksamhetsplanering.
-
-Särskilt fokus läggs på att göra AI tillgängligt för små föreningar utan teknisk expertis, och att skapa en community där föreningar kan dela erfarenheter och stötta varandra.`,
-      goals: 'Utveckla AI-verktyg anpassade för föreningslivets behov. Stötta minst 50 föreningar med AI-implementering. Skapa en peer-learning-community för förenings-AI. Dokumentera sociala effekter och inkluderingsvinster. Bygga en hållbar modell för fortsatt stöd.',
-      targetGroup: 'Ideella föreningar, civilsamhällesorganisationer och volontärgrupper i Gävleborgsregionen',
-      budget: grant.maxAmount || '1 500 000',
-      timeline: '12 månader (april 2026 - mars 2027)',
-      partners: ['Studieförbund', 'Föreningsråd', 'Civilsamhällesorganisationer'],
-    },
-  };
-
-  // Return proposal based on category, fallback to vinnova if not found
-  return proposals[grantCategory] || proposals.vinnova;
 }
 
 interface ProjectInfoStepProps {
@@ -399,24 +339,22 @@ interface ProjectInfoStepProps {
   onChange: (info: ProjectInfo) => void;
   onGenerateProposal: () => void;
   generating: boolean;
+  proposals: ProjectInfo[];
+  onSelectProposal: (p: ProjectInfo) => void;
 }
 
-function ProjectInfoStep({ projectInfo, onChange, onGenerateProposal, generating }: ProjectInfoStepProps) {
-  const hasContent = projectInfo.title || projectInfo.description;
-
+function ProjectInfoStep({ projectInfo, onChange, onGenerateProposal, generating, proposals, onSelectProposal }: ProjectInfoStepProps) {
   return (
     <div className="space-y-4">
-      {/* Generate Proposal Banner */}
       <div className="bg-gradient-to-r from-purple-600 to-pink-500 rounded-xl p-5 text-white">
         <div className="flex items-start gap-4">
           <div className="bg-white/20 p-3 rounded-lg">
             <Wand2 className="h-6 w-6" />
           </div>
           <div className="flex-1">
-            <h4 className="font-semibold text-lg mb-1">Generera projektförslag automatiskt</h4>
+            <h4 className="font-semibold text-lg mb-1">AI-Generera Förslag</h4>
             <p className="text-purple-100 text-sm mb-3">
-              Låt AI skapa ett komplett projektförslag baserat på utlysningen och SITK:s profil.
-              Du kan sedan granska och justera förslaget efter behov.
+              Låt Gemini skapa projektförslag skräddarsydda för din profil och utlysningen.
             </p>
             <Button
               onClick={onGenerateProposal}
@@ -424,73 +362,63 @@ function ProjectInfoStep({ projectInfo, onChange, onGenerateProposal, generating
               className="bg-white text-purple-600 hover:bg-purple-50"
             >
               <Lightbulb className="h-4 w-4 mr-2" />
-              {generating ? 'Genererar förslag...' : 'Skapa projektförslag'}
+              {generating ? 'Genererar förslag...' : 'Skapa 2 unika projektförslag'}
             </Button>
           </div>
         </div>
       </div>
 
-      {/* Or divider */}
-      {hasContent && (
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-gray-200" />
-          </div>
-          <div className="relative flex justify-center text-sm">
-            <span className="px-2 bg-white text-muted-foreground">eller redigera manuellt</span>
-          </div>
+      {proposals.length > 1 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 mb-4">
+           {proposals.map((p, idx) => (
+             <Card key={idx} className={`cursor-pointer transition-all ${projectInfo.title === p.title ? 'ring-2 ring-purple-500' : 'hover:bg-muted/50'}`} onClick={() => onSelectProposal(p)}>
+               <CardHeader className="p-4"><CardTitle className="text-sm">{p.title}</CardTitle></CardHeader>
+             </Card>
+           ))}
         </div>
       )}
+
       <div>
         <Label htmlFor="title">Projekttitel *</Label>
         <Input
           id="title"
           value={projectInfo.title}
           onChange={(e) => onChange({ ...projectInfo, title: e.target.value })}
-          placeholder="T.ex. AI-baserad effektivisering av kommunal ärendehantering"
         />
       </div>
-
       <div>
         <Label htmlFor="description">Projektbeskrivning</Label>
         <Textarea
           id="description"
           value={projectInfo.description}
           onChange={(e) => onChange({ ...projectInfo, description: e.target.value })}
-          placeholder="Beskriv kort vad projektet handlar om och vilket problem det löser..."
           rows={3}
         />
       </div>
-
       <div>
         <Label htmlFor="goals">Projektets mål</Label>
         <Textarea
           id="goals"
           value={projectInfo.goals}
           onChange={(e) => onChange({ ...projectInfo, goals: e.target.value })}
-          placeholder="Vad ska projektet uppnå? Vilka är de konkreta målen?"
           rows={2}
         />
       </div>
-
       <div>
         <Label htmlFor="targetGroup">Målgrupp</Label>
         <Input
           id="targetGroup"
           value={projectInfo.targetGroup}
           onChange={(e) => onChange({ ...projectInfo, targetGroup: e.target.value })}
-          placeholder="T.ex. Kommunala handläggare, lokala företag, föreningar..."
         />
       </div>
-
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <Label htmlFor="budget">Budget (kr)</Label>
+          <Label htmlFor="budget">Budget</Label>
           <Input
             id="budget"
             value={projectInfo.budget}
             onChange={(e) => onChange({ ...projectInfo, budget: e.target.value })}
-            placeholder="T.ex. 2 500 000"
           />
         </div>
         <div>
@@ -499,18 +427,15 @@ function ProjectInfoStep({ projectInfo, onChange, onGenerateProposal, generating
             id="timeline"
             value={projectInfo.timeline}
             onChange={(e) => onChange({ ...projectInfo, timeline: e.target.value })}
-            placeholder="T.ex. 12 månader (jan-dec 2026)"
           />
         </div>
       </div>
-
       <div>
-        <Label htmlFor="partners">Samarbetspartners (kommaseparerade)</Label>
+        <Label htmlFor="partners">Samarbetspartners</Label>
         <Input
           id="partners"
-          value={projectInfo.partners.join(', ')}
+          value={Array.isArray(projectInfo.partners) ? projectInfo.partners.join(', ') : projectInfo.partners}
           onChange={(e) => onChange({ ...projectInfo, partners: e.target.value.split(',').map(s => s.trim()) })}
-          placeholder="T.ex. Sandvikens kommun, Sandbacka Science Park..."
         />
       </div>
     </div>
@@ -549,10 +474,6 @@ function ApplicationContentStep({ stepId, content, onChange }: ApplicationConten
           className="font-mono text-sm"
         />
       </div>
-      <p className="text-sm text-muted-foreground">
-        Redigera texten ovan för att anpassa ansökan efter dina behov.
-        Texten är förgenererad baserat på projektinformationen och SITK:s profil.
-      </p>
     </div>
   );
 }

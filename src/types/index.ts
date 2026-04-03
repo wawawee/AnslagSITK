@@ -11,7 +11,7 @@ export interface Grant {
   status: 'open' | 'closing_soon' | 'closed';
 }
 
-export interface SITKProfile {
+export interface OrgProfile {
   name: string;
   description: string;
   focusAreas: string[];
