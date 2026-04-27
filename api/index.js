@@ -1,4 +1,4 @@
-import { VertexAI } from '@google-cloud/vertexai';
+import OpenAI from 'openai';
 import cors from 'cors';
 import 'dotenv/config';
 import express from 'express';
@@ -12,38 +12,118 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-const PROJECT_ID = process.env.VERTEX_PROJECT || process.env.GCP_PROJECT_ID || 'taxrevision';
-const LOCATION = process.env.VERTEX_LOCATION || process.env.GCP_LOCATION || 'global';
-
-const vertexAI = new VertexAI({ 
-    project: PROJECT_ID, 
-    location: LOCATION, 
-    apiEndpoint: 'aiplatform.googleapis.com' 
+// --- Azure AI Foundry Multi-Zone Setup ---
+const mkClient = (endpoint, key) => new OpenAI({
+  baseURL: endpoint,
+  apiKey: key,
+  defaultHeaders: { 'api-key': key },
 });
 
-const modelPro = vertexAI.getGenerativeModel({ model: 'gemini-3.1-pro-preview' });
-const modelFlash = vertexAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
-const modelFallback = vertexAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+const azureSweden = mkClient(process.env.AZURE_SWEDEN_OPENAI_ENDPOINT,  process.env.AZURE_SWEDEN_API_KEY);
+const azureUSA    = mkClient(process.env.AZURE_USA_OPENAI_ENDPOINT,     process.env.AZURE_USA_API_KEY);
+const azureWestUS = mkClient(process.env.AZURE_WESTUS_OPENAI_ENDPOINT,  process.env.AZURE_WESTUS_API_KEY);
+const azureNorway = mkClient(process.env.AZURE_NORWAY_OPENAI_ENDPOINT,  process.env.AZURE_NORWAY_API_KEY);
 
-async function generateWithFallback(primaryModel, prompt, fallbackModel) {
+// Zone map — each zone knows exactly which deployment name to use per task mode:
+//   reason = planning / analytical tasks  (gpt-5.3 reasoning series)
+//   pro    = synthesis / proposal writing (gpt-5.4 capable series)
+//   fast   = light/quick tasks            (nano / mini)
+const ZONE_MAP = [
+  {
+    name: 'Sweden Central', client: azureSweden,
+    models: { reason: 'gpt-5.3-codex', pro: 'gpt-5.4-1',    fast: 'o4-mini' },
+  },
+  {
+    name: 'East US 2',      client: azureUSA,
+    models: { reason: 'o4-mini',        pro: 'gpt-5.4',      fast: 'o4-mini' },
+  },
+  {
+    name: 'Norway East',    client: azureNorway,
+    models: { reason: 'gpt-5.3-chat',   pro: 'gpt-5.4',      fast: 'gpt-5.4-nano' },
+  },
+  {
+    name: 'West US 3',      client: azureWestUS,
+    models: { reason: 'gpt-5.2-chat',   pro: 'gpt-5.2-chat', fast: 'gpt-4o' },
+  },
+];
+
+async function azureChat(client, model, prompt, zone = 'unknown') {
+  // o-series models use max_completion_tokens and don't support temperature
+  const isOSeries = /^o\d/i.test(model);
+  const params = {
+    model,
+    messages: [{ role: 'user', content: prompt }],
+    max_completion_tokens: 4096,
+  };
+  if (!isOSeries) params.temperature = 0.7;
+  const response = await client.chat.completions.create(params);
+  return response.choices[0].message.content;
+}
+
+// mode: 'pro' (synthesis/proposals) | 'reason' (planning/analysis) | 'fast' (quick tasks)
+async function generateWithFallback(prompt, mode = 'pro') {
+  // backwards-compat: boolean true → 'pro', false → 'reason'
+  if (mode === true)  mode = 'pro';
+  if (mode === false) mode = 'reason';
+
+  for (const zone of ZONE_MAP) {
+    const model = zone.models[mode] || zone.models.pro;
+    try {
+      const result = await azureChat(zone.client, model, prompt, zone.name);
+      console.log(`✅ Azure ${zone.name} [${mode}]: ${model}`);
+      return result;
+    } catch (err) {
+      console.warn(`⚠ Azure ${zone.name} misslyckades: ${err.message} — provar nästa zon...`);
+    }
+  }
+  throw new Error('Alla Azure-zoner misslyckades');
+}
+
+// --- Exa Web Search (ersätter Google Grounding) ---
+const EXA_API_KEY = process.env.EXA_API_KEY;
+
+async function runExaSearch(query, taskId = null) {
+  const logMsg = `🔍 Exa söker: "${query.substring(0, 80)}..."`;
+  if (taskId) updateTaskStatus(taskId, logMsg);
+  console.log(logMsg);
+
   try {
-    const result = await primaryModel.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+    const response = await fetch('https://api.exa.ai/search', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': EXA_API_KEY,
+      },
+      body: JSON.stringify({
+        query,
+        numResults: 5,
+        useAutoprompt: true,
+        type: 'neural',
+        contents: { text: { maxCharacters: 2000 } },
+      }),
     });
-    return result.response.candidates[0].content.parts[0].text;
+
+    if (!response.ok) throw new Error(`Exa API ${response.status}: ${await response.text()}`);
+    const data = await response.json();
+
+    const output = data.results
+      .map(r => `**${r.title}**\nURL: ${r.url}\n${r.text || ''}`)
+      .join('\n\n---\n\n');
+
+    return { output };
   } catch (err) {
-    console.warn(`Primary model failed (${err.message}), trying fallback...`);
-    const result = await fallbackModel.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }]
-    });
-    return result.response.candidates[0].content.parts[0].text;
+    console.error('Exa search failed:', err.message);
+    // Fallback: låt Azure generera svar utan live-data
+    const fallbackPrompt = `Du är en researcher om svenska anslag. Svara på frågan baserat på din kunskap om: ${query}. Fokusera på utlysningar 2025-2026. Ge konkreta finansiärer, belopp och URLer.`;
+    const text = await generateWithFallback(fallbackPrompt, 'pro');
+    return { output: text };
   }
 }
 
+// --- Task tracking ---
 const discoveryTasks = new Map();
 
 function updateTaskStatus(taskId, message) {
@@ -55,46 +135,21 @@ function updateTaskStatus(taskId, message) {
   }
 }
 
-const modelSearch = vertexAI.getGenerativeModel({
-  model: 'gemini-3-flash-preview',
-  tools: [{ googleSearch: {} }],
-});
-
-async function runGoogleSearch(query, taskId = null) {
-  const logMsg = `🔍 Söker: "${query.substring(0, 80)}..."`;
-  if (taskId) updateTaskStatus(taskId, logMsg);
-  console.log(logMsg);
-
-  try {
-    const prompt = `Du är en researcher specialiserad på svenska forskningsanslag och riskkapital för AI.
-Sök information om: ${query}
-Fokusera på utlysningar och projektmedel för 2026.
-Inkludera konkreta detaljer: finansiär, deadline, belopp, URL.
-Svara kortfattat och strukturerat på svenska.`;
-    
-    const result = await modelSearch.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }]
-    });
-    const text = result.response.candidates[0].content.parts[0].text;
-    return { output: text };
-  } catch (err) {
-    console.error('Google Search Grounding failed:', err.message);
-    throw err;
-  }
-}
+// --- Routes ---
 
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    vertexConfig: { project: PROJECT_ID, location: LOCATION }
+    backend: 'Azure AI Foundry',
+    zones: ZONE_MAP.map(z => ({ name: z.name, models: z.models })),
+    search: EXA_API_KEY ? 'Exa (live)' : 'Azure fallback',
   });
 });
 
-const ADMIN_USERNAME = 'sitk_admin';
-const ADMIN_PASSWORD = 'Sandviken2024!';
-
 app.post('/api/auth/login', (req, res) => {
+  const ADMIN_USERNAME = 'sitk_admin';
+  const ADMIN_PASSWORD = 'Sandviken2024!';
   const { username, password } = req.body;
   if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
     res.json({ success: true, token: 'sitk-auth-token-v1', user: { name: 'Admin', role: 'admin' } });
@@ -103,9 +158,7 @@ app.post('/api/auth/login', (req, res) => {
   }
 });
 
-app.post('/api/auth/logout', (req, res) => {
-  res.json({ success: true });
-});
+app.post('/api/auth/logout', (req, res) => res.json({ success: true }));
 
 app.get('/api/auth/me', (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -136,7 +189,7 @@ Returnera 3-5 relevanta utlysningar i detta exakta format:
 - **Relevans**: [Varför passar detta ${orgName}?]
 - **URL**: [https://...]`;
 
-    const text = await generateWithFallback(modelFlash, prompt, modelFallback);
+    const text = await generateWithFallback(prompt, 'pro');
     res.json({ output: text });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -146,53 +199,49 @@ Returnera 3-5 relevanta utlysningar i detta exakta format:
 app.post('/api/discover-grants', async (req, res) => {
   const taskId = `disc-${Date.now()}`;
   discoveryTasks.set(taskId, {
-    id: taskId,
-    status: 'Startar...',
-    logs: [],
-    result: null,
-    completed: false,
+    id: taskId, status: 'Startar...', logs: [], result: null, completed: false,
   });
-
   res.json({ success: true, taskId });
 
   (async () => {
     try {
       const { query = 'finansiering projektmedel 2026 riskkapital AI', orgProfile } = req.body;
       const orgName = orgProfile?.name || 'Vår organisation';
-      
-      updateTaskStatus(taskId, `Planerar sökstrategi baserat på ${orgName}...`);
+
+      updateTaskStatus(taskId, `Planerar sökstrategi för ${orgName} via Azure...`);
 
       const planPrompt = `Du är en expert på finansiering för AI-projekt. Organisation: ${orgName}. De söker kapital.
-Skapa 3 specifika och distinkta sökinstruktioner för att hitta nischade utlysningar eller riskkapital.
-Returnera ENDAST en JSON-array med strängar, inget annat.
-Exempel: ["Sök Vinnova utlysningar AI 2026", "Riskkapital AI startups Sverige"]`;
+Skapa 3 distinkta sökfraser för att hitta utlysningar eller riskkapital.
+Returnera ENDAST en JSON-array med 3 korta söksträngar (plain text, INTE objekt).
+Exempel: ["Vinnova utlysningar AI 2026", "Riskkapital seed AI startups Sverige", "Tillväxtverket digitaliseringsstöd SMF 2026"]
+Svar:`;
 
-      updateTaskStatus(taskId, 'Genererar sökplan med Gemini...');
-      const planText = await generateWithFallback(modelFlash, planPrompt, modelFallback);
-
+      const planText = await generateWithFallback(planPrompt, 'reason');
       let searchSteps = [];
       try {
         const jsonMatch = planText.match(/\[[\s\S]*\]/);
         searchSteps = JSON.parse(jsonMatch ? jsonMatch[0] : planText);
         if (!Array.isArray(searchSteps) || searchSteps.length === 0) throw new Error('No steps');
+        searchSteps = searchSteps.map(s =>
+          typeof s === 'string' ? s : (s.sökterm || s.instruktion || s.query || s.step || JSON.stringify(s))
+        );
       } catch (e) {
         searchSteps = [
-          'Sök Vinnova utlysningar AI digitalisering 2026',
+          'Vinnova utlysningar AI digitalisering 2026',
           'Riskkapital seed investeringar AI Sverige 2026',
           'Tillväxtverket digitaliseringsstöd AI SMF 2026',
         ];
       }
 
-      updateTaskStatus(taskId, `Sökplan skapad: ${searchSteps.length} steg. Startar webbsökning...`);
+      updateTaskStatus(taskId, `Sökplan: ${searchSteps.length} steg. Startar Exa-sökning...`);
 
       const allResults = [];
       for (let i = 0; i < searchSteps.length; i++) {
         const step = searchSteps[i];
         updateTaskStatus(taskId, `Steg ${i + 1}/${searchSteps.length}: ${step}`);
         try {
-          const browserResult = await runGoogleSearch(step, taskId);
-          const output = browserResult.output || '';
-          allResults.push({ step, output: output.substring(0, 3000) });
+          const result = await runExaSearch(step, taskId);
+          allResults.push({ step, output: result.output.substring(0, 3000) });
           updateTaskStatus(taskId, `✓ Steg ${i + 1} klar.`);
         } catch (err) {
           updateTaskStatus(taskId, `⚠ Steg ${i + 1} misslyckades: ${err.message}`);
@@ -200,11 +249,14 @@ Exempel: ["Sök Vinnova utlysningar AI 2026", "Riskkapital AI startups Sverige"]
         }
       }
 
-      updateTaskStatus(taskId, 'Syntetiserar resultat med Gemini...');
+      updateTaskStatus(taskId, 'Syntetiserar resultat via Azure...');
 
-      const synthesisInput = `Rådata från webbsökningar:\n${JSON.stringify(allResults.map(r => ({ step: r.step, output: r.output?.substring(0, 1000) })), null, 1)}`;
+      const synthesisInput = JSON.stringify(
+        allResults.map(r => ({ step: r.step, output: r.output?.substring(0, 1000) })), null, 1
+      );
 
       const synthesisPrompt = `Du är en expert som hjälper ${orgName} att hitta finansiering för AI.
+Rådata från webbsökningar:
 ${synthesisInput}
 
 Sammanställ en lista på 6-8 konkreta utlysningar eller riskkapitalmöjligheter för 2026.
@@ -218,7 +270,7 @@ Använd EXAKT detta format:
 - **Relevans**: [Varför passar detta?]
 - **URL**: [https://...]`;
 
-      const finalOutput = await generateWithFallback(modelFlash, synthesisPrompt, modelFallback);
+      const finalOutput = await generateWithFallback(synthesisPrompt, 'pro');
       updateTaskStatus(taskId, '✓ Discovery slutförd!');
 
       const taskObj = discoveryTasks.get(taskId);
@@ -246,13 +298,20 @@ app.get('/api/discovery-status/:taskId', (req, res) => {
 
 app.post('/api/deep-search', async (req, res) => {
   try {
-    const { query } = req.body;
-    const planPrompt = `Skapa en sökplan för: "${query}". Returnera ENDAST en JSON-array med 3 sökinstruktioner.`;
-    const planText = await generateWithFallback(modelFlash, planPrompt, modelFallback);
+    const { query, orgProfile } = req.body;
+    const planPrompt = `Skapa 3 söksträng-fraser för webbsökning om: "${query}".
+Returnera ENDAST en JSON-array med 3 korta söksträngar (plain text, inte objekt).
+Exempel: ["Vinnova FoU-stöd AI 2026", "Tillväxtverket startup bidrag Gävleborg", "EU Horisont innovation skatteåtervinning"]
+Svar:`;
+    const planText = await generateWithFallback(planPrompt, 'reason');
+
     let searchSteps = [];
     try {
       const jsonMatch = planText.match(/\[[\s\S]*\]/);
       searchSteps = JSON.parse(jsonMatch ? jsonMatch[0] : planText);
+      searchSteps = searchSteps.map(s =>
+        typeof s === 'string' ? s : (s.sökterm || s.instruktion || s.query || s.step || JSON.stringify(s))
+      );
     } catch (e) {
       searchSteps = [query];
     }
@@ -260,8 +319,8 @@ app.post('/api/deep-search', async (req, res) => {
     const results = [];
     for (const step of searchSteps.slice(0, 3)) {
       try {
-        const browserResult = await runGoogleSearch(step);
-        results.push({ step, output: browserResult.output?.substring(0, 2000) || 'Inga resultat' });
+        const result = await runExaSearch(String(step));
+        results.push({ step, output: result.output?.substring(0, 2000) || 'Inga resultat' });
       } catch (err) {
         results.push({ step, output: '', error: err.message });
       }
@@ -269,8 +328,8 @@ app.post('/api/deep-search', async (req, res) => {
 
     const synthesisPrompt = `Sammanställ sökresultaten om: "${query}"
 ${JSON.stringify(results)}
-Formatera som ## [Namn] lista med tydliga leads. Skriv på svenska.`;
-    const synthesisText = await generateWithFallback(modelFlash, synthesisPrompt, modelFallback);
+Formatera som ## [Namn] lista med tydliga leads. Skriv på svenska. Inkludera deadlines och URLer.`;
+    const synthesisText = await generateWithFallback(synthesisPrompt, 'pro');
 
     res.json({ success: true, plan: searchSteps, rawResults: results, synthesis: synthesisText });
   } catch (error) {
@@ -294,9 +353,8 @@ Returnera ENDAST en JSON-array med ${count} objekt som matchar detta exakta grä
   "budget": "String",
   "timeline": "String",
   "partners": ["Partner 1", "Partner 2"]
-}
-`;
-    const text = await generateWithFallback(modelPro, prompt, modelFallback);
+}`;
+    const text = await generateWithFallback(prompt, 'pro');
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     const proposals = JSON.parse(jsonMatch ? jsonMatch[0] : '[]');
     res.json({ success: true, proposals });
@@ -324,7 +382,7 @@ Returnera ett JSON-objekt med dessa fält EXAKT (för React-klienten):
   "dissemination": "Nyttjanderätt och spridning..."
 }`;
 
-    const text = await generateWithFallback(modelPro, prompt, modelFallback);
+    const text = await generateWithFallback(prompt, 'pro');
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     const content = JSON.parse(jsonMatch ? jsonMatch[0] : '{}');
     res.json({ success: true, content });
@@ -333,6 +391,7 @@ Returnera ett JSON-objekt med dessa fält EXAKT (för React-klienten):
   }
 });
 
+// Serve frontend in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '..', 'dist')));
   app.get(/(.*)/, (req, res) => {
@@ -341,7 +400,9 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const server = app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`✅ AnslagSITK backend på port ${PORT}`);
+  console.log(`🔵 Azure AI Foundry: Sweden Central (primary) → East US 2 → West US 3`);
+  console.log(`🔍 Search: ${EXA_API_KEY ? 'Exa live search' : 'Azure fallback (no Exa key)'}`);
 });
 
 export default app;
