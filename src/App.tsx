@@ -1,13 +1,23 @@
 import { Login } from '@/components/Login';
+import { loadStoredProfile } from '@/components/OrgProfileCard';
 import { Toaster } from '@/components/ui/sonner';
 import { AgentIntelligence } from '@/sections/AgentIntelligence';
 import { ApplicationWriter } from '@/sections/ApplicationWriter';
 import { DraftsList } from '@/sections/DraftsList';
 import { GrantSearch } from '@/sections/GrantSearch';
 import { Header } from '@/sections/Header';
-import type { Grant } from '@/types';
+import type { Grant, OrgProfile } from '@/types';
 import { useState } from 'react';
 import './App.css';
+
+const defaultOrgProfile: OrgProfile = {
+  name: '',
+  description: '',
+  focusAreas: [],
+  strengths: [],
+  partnerships: [],
+  region: '',
+};
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
@@ -15,6 +25,9 @@ function App() {
   });
   const [activeTab, setActiveTab] = useState('search');
   const [selectedGrant, setSelectedGrant] = useState<Grant | null>(null);
+  const [orgProfile, setOrgProfile] = useState<OrgProfile>(() => {
+    return loadStoredProfile() ?? defaultOrgProfile;
+  });
 
   const handleSelectGrant = (grant: Grant) => {
     setSelectedGrant(grant);
@@ -43,11 +56,15 @@ function App() {
 
       <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === 'search' && (
-          <GrantSearch onSelectGrant={handleSelectGrant} />
+          <GrantSearch
+            onSelectGrant={handleSelectGrant}
+            orgProfile={orgProfile}
+            onOrgProfileChange={setOrgProfile}
+          />
         )}
 
         {activeTab === 'writer' && (
-          <ApplicationWriter selectedGrant={selectedGrant} />
+          <ApplicationWriter selectedGrant={selectedGrant} orgProfile={orgProfile} />
         )}
 
         {activeTab === 'drafts' && (

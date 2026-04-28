@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 
 interface ApplicationWriterProps {
   selectedGrant: Grant | null;
+  orgProfile?: OrgProfile;
 }
 
 const defaultOrgProfile: OrgProfile = {
@@ -41,7 +42,7 @@ const steps = [
   { id: 'dissemination', label: 'Spridning', icon: Share2 },
 ];
 
-export function ApplicationWriter({ selectedGrant }: ApplicationWriterProps) {
+export function ApplicationWriter({ selectedGrant, orgProfile: externalProfile }: ApplicationWriterProps) {
   const [currentStep, setCurrentStep] = useState(0);
   const [generating, setGenerating] = useState(false);
   const [draft, setDraft] = useState<ApplicationDraft | null>(null);
@@ -57,7 +58,10 @@ export function ApplicationWriter({ selectedGrant }: ApplicationWriterProps) {
   });
 
   const [proposals, setProposals] = useState<ProjectInfo[]>([]);
-  const [profile, setProfile] = useState<OrgProfile>(defaultOrgProfile);
+  // Use the externally-provided profile (from App-level state) if available and filled in,
+  // otherwise fall back to the hardcoded default so the writer still works standalone.
+  const resolvedDefault = externalProfile?.name ? externalProfile : defaultOrgProfile;
+  const [profile, setProfile] = useState<OrgProfile>(resolvedDefault);
 
   const generateProjectProposal = async () => {
     if (!selectedGrant) {

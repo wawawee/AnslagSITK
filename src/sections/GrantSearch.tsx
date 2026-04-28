@@ -1,3 +1,4 @@
+import { OrgProfileCard } from '@/components/OrgProfileCard';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -6,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { apiService } from '@/services/api';
-import type { Grant, SearchFilters } from '@/types';
+import type { Grant, OrgProfile, SearchFilters } from '@/types';
 import { AlertCircle, Building2, Calendar, CheckCircle2, Clock, Euro, ExternalLink, Filter, Search } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -35,9 +36,11 @@ const statusIcons = {
 
 interface GrantSearchProps {
   onSelectGrant: (grant: Grant) => void;
+  orgProfile: OrgProfile;
+  onOrgProfileChange: (profile: OrgProfile) => void;
 }
 
-export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
+export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: GrantSearchProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [filters, setFilters] = useState<SearchFilters>({});
   const [grants, setGrants] = useState<Grant[]>([]);
@@ -62,7 +65,7 @@ export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
   const handleSearch = async () => {
     setLoading(true);
     try {
-      const results = await apiService.searchGrants(searchQuery, filters);
+      const results = await apiService.searchGrants(searchQuery, filters, false, orgProfile.name ? orgProfile : undefined);
       // Merge results with existing grants, avoiding duplicates by ID
       setGrants(prev => {
         const existingIds = new Set(prev.map(g => g.id));
@@ -87,7 +90,7 @@ export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
 
     setLoading(true);
     try {
-      const result = await apiService.deepSearch(searchQuery);
+      const result = await apiService.deepSearch(searchQuery, orgProfile.name ? orgProfile : undefined);
 
       if (result.success) {
         setDeepSearchSynthesis(result.synthesis);
@@ -95,7 +98,7 @@ export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
         toast.success('Djupsökning slutförd');
 
         // Try to parse the synthesis for grants
-        const parsedGrants = await apiService.searchGrants(searchQuery, filters, true);
+        const parsedGrants = await apiService.searchGrants(searchQuery, filters, true, orgProfile.name ? orgProfile : undefined);
         if (parsedGrants.length > 0) {
           setGrants(prev => {
             const existingIds = new Set(prev.map(g => g.id));
@@ -118,6 +121,9 @@ export function GrantSearch({ onSelectGrant }: GrantSearchProps) {
 
   return (
     <div className="space-y-6">
+      {/* Org Profile */}
+      <OrgProfileCard profile={orgProfile} onChange={onOrgProfileChange} />
+
       {/* Search Header */}
       <div className="relative overflow-hidden bg-gradient-to-br from-blue-600/90 via-blue-600 to-cyan-500/90 rounded-2xl p-6 md:p-8 text-white shadow-xl shadow-blue-500/20 backdrop-blur-md border border-white/10">
         <div className="absolute top-0 right-0 -mt-12 -mr-12 w-64 h-64 bg-white/10 rounded-full blur-3xl pointer-events-none" />
