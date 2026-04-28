@@ -6,7 +6,7 @@ import { ApplicationWriter } from '@/sections/ApplicationWriter';
 import { DraftsList } from '@/sections/DraftsList';
 import { GrantSearch } from '@/sections/GrantSearch';
 import { Header } from '@/sections/Header';
-import type { Grant, OrgProfile } from '@/types';
+import type { ApplicationDraft, Grant, OrgProfile } from '@/types';
 import { useState } from 'react';
 import './App.css';
 
@@ -31,6 +31,12 @@ function App() {
 
   const handleSelectGrant = (grant: Grant) => {
     setSelectedGrant(grant);
+    setActiveTab('writer');
+  };
+
+  const handleResumeDraft = (draft: ApplicationDraft) => {
+    // Load the grant for this draft if available, then navigate to writer
+    setSelectedGrant(draft.grantId ? { id: draft.grantId, name: draft.projectInfo.title, funder: '', deadline: '', description: '', category: 'other', status: 'open' } : null);
     setActiveTab('writer');
   };
 
@@ -68,7 +74,7 @@ function App() {
         )}
 
         {activeTab === 'drafts' && (
-          <DraftsList />
+          <DraftsList onResumeDraft={handleResumeDraft} />
         )}
 
         {activeTab === 'intelligence' && (

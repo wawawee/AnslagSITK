@@ -54,13 +54,15 @@ const orgTypeIcons: Record<OrgType, React.ReactNode> = {
 
 export function OrgProfileCard({ profile, onChange }: OrgProfileCardProps) {
   const [expanded, setExpanded] = useState(!profile.name);
-  const [orgType, setOrgType] = useState<OrgType>('Förening');
-  const [orgNr, setOrgNr] = useState('');
+  const [orgType, setOrgType] = useState<OrgType>((profile.orgType as OrgType) || 'Förening');
+  const [orgNr, setOrgNr] = useState(profile.orgNr || '');
 
   const isComplete = !!profile.name && !!profile.description;
 
   const handleSave = () => {
-    saveProfile(profile);
+    const withMeta = { ...profile, orgType, orgNr };
+    saveProfile(withMeta);
+    onChange(withMeta);
     setExpanded(false);
   };
 

@@ -18,6 +18,8 @@ export interface OrgProfile {
   strengths: string[];
   partnerships: string[];
   region: string;
+  orgType?: string;
+  orgNr?: string;
 }
 
 export interface ProjectInfo {

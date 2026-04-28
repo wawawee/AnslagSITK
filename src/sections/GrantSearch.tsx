@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { apiService } from '@/services/api';
 import type { Grant, OrgProfile, SearchFilters } from '@/types';
 import { AlertCircle, Building2, Calendar, CheckCircle2, Clock, Euro, ExternalLink, Filter, Search } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 const categoryColors: Record<string, string> = {
@@ -49,18 +49,17 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
   const [deepSearchSynthesis, setDeepSearchSynthesis] = useState<string | null>(null);
   const [researchSteps, setResearchSteps] = useState<string[]>([]);
 
-  // Load grants on mount
-  useState(() => {
+  // Load grants on mount (useEffect, not useState — fixes re-render side-effect bug)
+  useEffect(() => {
     const savedGrants = apiService.loadDiscoveredGrants();
     if (savedGrants.length > 0) {
       setGrants(savedGrants);
     } else {
-      // Initialize with mock grants if nothing saved
       const mocks = apiService.getMockGrants();
       setGrants(mocks);
       apiService.saveDiscoveredGrants(mocks);
     }
-  });
+  }, []);
 
   const handleSearch = async () => {
     setLoading(true);
@@ -288,6 +287,7 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
               <GrantCard
                 key={grant.id}
                 grant={grant}
+                orgName={orgProfile.name}
                 onSelect={() => setSelectedGrant(grant)}
                 onWriteApplication={() => onSelectGrant(grant)}
               />
@@ -307,6 +307,7 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
               <GrantCard
                 key={grant.id}
                 grant={grant}
+                orgName={orgProfile.name}
                 onSelect={() => setSelectedGrant(grant)}
                 onWriteApplication={() => onSelectGrant(grant)}
               />
@@ -320,6 +321,7 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
               <GrantCard
                 key={grant.id}
                 grant={grant}
+                orgName={orgProfile.name}
                 onSelect={() => setSelectedGrant(grant)}
                 onWriteApplication={() => onSelectGrant(grant)}
               />
@@ -333,6 +335,7 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
               <GrantCard
                 key={grant.id}
                 grant={grant}
+                orgName={orgProfile.name}
                 onSelect={() => setSelectedGrant(grant)}
                 onWriteApplication={() => onSelectGrant(grant)}
               />
@@ -423,11 +426,12 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
 
 interface GrantCardProps {
   grant: Grant;
+  orgName?: string;
   onSelect: () => void;
   onWriteApplication: () => void;
 }
 
-function GrantCard({ grant, onSelect, onWriteApplication }: GrantCardProps) {
+function GrantCard({ grant, orgName, onSelect, onWriteApplication }: GrantCardProps) {
   return (
     <Card
       className="group relative overflow-hidden border-white/20 bg-white/5 backdrop-blur-md shadow-lg hover:shadow-2xl hover:bg-white/10 transition-all duration-500 cursor-pointer border-l-4 border-l-blue-500"
@@ -493,7 +497,7 @@ function GrantCard({ grant, onSelect, onWriteApplication }: GrantCardProps) {
           <div className="pt-2">
             <div className="text-[10px] font-bold text-blue-500/80 uppercase tracking-widest flex items-center gap-1 mb-1">
               <CheckCircle2 className="h-3 w-3" />
-              SITK Match
+              {orgName ? `${orgName} – Match` : 'Relevans'}
             </div>
             <p className="text-[11px] text-slate-500 italic line-clamp-1">
               "{grant.relevance}"

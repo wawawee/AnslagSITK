@@ -119,36 +119,49 @@ export function ApplicationWriter({ selectedGrant, orgProfile: externalProfile }
 
   const downloadDraft = () => {
     if (draft) {
-      const content = `
-# ${projectInfo.title}
+      const sep = '─'.repeat(60);
+      const content = [
+        projectInfo.title.toUpperCase(),
+        sep,
+        `Utlysning: ${selectedGrant?.name || ''}`,
+        `Finansiär: ${selectedGrant?.funder || ''}`,
+        `Deadline: ${selectedGrant?.deadline || ''}`,
+        sep,
+        '',
+        'SAMMANFATTNING',
+        sep,
+        draft.content.summary,
+        '',
+        'PROJEKTBESKRIVNING',
+        sep,
+        draft.content.projectDescription,
+        '',
+        'MÅL OCH FÖRVÄNTADE RESULTAT',
+        sep,
+        draft.content.goals,
+        '',
+        'GENOMFÖRANDEPLAN',
+        sep,
+        draft.content.implementation,
+        '',
+        'BUDGET',
+        sep,
+        draft.content.budget,
+        '',
+        'ORGANISATIONENS KOMPETENS',
+        sep,
+        draft.content.competence,
+        '',
+        'NYTTJANDERÄTT OCH SPRIDNING',
+        sep,
+        draft.content.dissemination,
+      ].join('\n');
 
-## Sammanfattning
-${draft.content.summary}
-
-## Projektbeskrivning
-${draft.content.projectDescription}
-
-## Mål och förväntade resultat
-${draft.content.goals}
-
-## Genomförandeplan
-${draft.content.implementation}
-
-## Budget
-${draft.content.budget}
-
-## Organisationens kompetens
-${draft.content.competence}
-
-## Nyttjanderätt och spridning
-${draft.content.dissemination}
-      `.trim();
-
-      const blob = new Blob([content], { type: 'text/markdown' });
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `ansokan-${selectedGrant?.id || 'utkast'}.md`;
+      a.download = `ansokan-${(projectInfo.title || selectedGrant?.id || 'utkast').replace(/\s+/g, '_')}.txt`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -174,22 +187,15 @@ ${draft.content.dissemination}
 
   return (
     <div className="space-y-6">
-      {/* Profil-inställning (enkel för nu) */}
-      <Card className="bg-muted/30">
-        <CardHeader>
-          <CardTitle className="text-sm">Din Organisationsprofil (Redigera vid behov)</CardTitle>
-        </CardHeader>
-        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <Label>Namn</Label>
-            <Input value={profile.name} onChange={e => setProfile({...profile, name: e.target.value})} />
-          </div>
-          <div>
-            <Label>Kort Beskrivning</Label>
-            <Input value={profile.description} onChange={e => setProfile({...profile, description: e.target.value})} />
-          </div>
-        </CardContent>
-      </Card>
+      {/* Compact org banner */}
+      <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-muted/40 border text-sm">
+        <Building2 className="h-4 w-4 text-blue-600 shrink-0" />
+        <span className="text-muted-foreground">Söker som:</span>
+        <span className="font-semibold">{profile.name || 'Ingen profil vald'}</span>
+        {profile.description && (
+          <span className="text-muted-foreground hidden sm:inline truncate max-w-xs">— {profile.description}</span>
+        )}
+      </div>
 
       <div className="bg-gradient-to-r from-blue-600 to-cyan-500 rounded-2xl p-6 text-white">
         <div className="flex items-start justify-between">

@@ -8,7 +8,11 @@ import { Calendar, Download, Edit, Euro, FileText, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
-export function DraftsList() {
+interface DraftsListProps {
+  onResumeDraft?: (draft: ApplicationDraft) => void;
+}
+
+export function DraftsList({ onResumeDraft }: DraftsListProps = {}) {
   const [drafts, setDrafts] = useState<ApplicationDraft[]>(() => {
     const saved = localStorage.getItem('sitk-drafts');
     return saved ? JSON.parse(saved) : [];
@@ -131,14 +135,26 @@ ${draft.content.dissemination}
                   </span>
                 )}
               </div>
-              <Button
-                variant="ghost"
-                className="w-full mt-4 text-blue-600 hover:text-blue-800 hover:bg-blue-50"
-                onClick={() => setSelectedDraft(draft)}
-              >
-                <Edit className="h-4 w-4 mr-2" />
-                Visa detaljer
-              </Button>
+              <div className="flex gap-2 mt-4">
+                <Button
+                  variant="ghost"
+                  className="flex-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50"
+                  onClick={() => setSelectedDraft(draft)}
+                >
+                  <Edit className="h-4 w-4 mr-2" />
+                  Detaljer
+                </Button>
+                {onResumeDraft && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-xs"
+                    onClick={() => onResumeDraft(draft)}
+                  >
+                    Återuppta →
+                  </Button>
+                )}
+              </div>
             </CardContent>
           </Card>
         ))}
