@@ -77,6 +77,44 @@ export interface GrantSearchOptions {
   targetCount?: number;
   /** quick=2 Exa, standard=4, broad=6 + stiftelser/fonder */
   searchMode?: 'quick' | 'standard' | 'broad';
+  /** Kuraterad OpenRouter-modell (sparad i localStorage) */
+  modelSettings?: ModelSettings;
+}
+
+/** Admin: val av OpenRouter-modell (kuraterad lista) */
+export interface ModelSettings {
+  presetId: 'recommended' | 'budget' | 'premium' | 'lottery' | 'custom';
+  /** Planering / sökstrategi */
+  reasonModel?: string;
+  /** Syntes / ansökningar */
+  proModel?: string;
+}
+
+export interface CuratedModelInfo {
+  id: string;
+  label: string;
+  tier: string;
+  badge: string;
+  description: string;
+}
+
+export interface ModelPresetInfo {
+  id: string;
+  label: string;
+  description: string;
+  reason: string[];
+  pro: string[];
+}
+
+export interface OpenRouterCreditsInfo {
+  success: boolean;
+  available: boolean;
+  remainingCredits?: number;
+  totalCredits?: number;
+  totalUsage?: number;
+  currency?: string;
+  message?: string;
+  note?: string;
 }
 
 export interface DeepSearchStepResult {

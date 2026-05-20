@@ -1,8 +1,28 @@
-import type { ApplicationDraft, DeepSearchResponse, Grant, GrantIntelligence, ProjectInfo, SearchFilters, OrgProfile, FundingEntity, PortfolioAccount, PortfolioAccountDetail, GrantSearchOptions } from '@/types';
+import type {
+  ApplicationDraft,
+  CuratedModelInfo,
+  DeepSearchResponse,
+  Grant,
+  GrantIntelligence,
+  ModelPresetInfo,
+  ModelSettings,
+  OpenRouterCreditsInfo,
+  ProjectInfo,
+  SearchFilters,
+  OrgProfile,
+  FundingEntity,
+  PortfolioAccount,
+  PortfolioAccountDetail,
+  GrantSearchOptions,
+} from '@/types';
+import { loadModelSettings } from '@/utils/modelSettings';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 class ApiService {
+  private withModelSettings<T extends object>(body: T): T & { modelSettings: ModelSettings } {
+    return { ...body, modelSettings: loadModelSettings() };
+  }
   private async fetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     let response: Response;
     try {
@@ -46,8 +66,20 @@ class ApiService {
   async grantIntelligence(grantInfo: Grant, orgProfile?: OrgProfile): Promise<GrantIntelligence> {
     return this.fetch('/api/grant-intelligence', {
       method: 'POST',
-      body: JSON.stringify({ grantInfo, orgProfile }),
+      body: JSON.stringify(this.withModelSettings({ grantInfo, orgProfile })),
     });
+  }
+
+  async getCuratedModels(): Promise<{
+    models: CuratedModelInfo[];
+    presets: ModelPresetInfo[];
+    pricingUrl: string;
+  }> {
+    return this.fetch('/api/models/curated');
+  }
+
+  async getOpenRouterCredits(): Promise<OpenRouterCreditsInfo> {
+    return this.fetch('/api/openrouter/credits');
   }
 
   async pollSearchTask(
@@ -136,7 +168,7 @@ class ApiService {
       searchSteps?: string[];
     }>('/api/search-grants', {
       method: 'POST',
-      body: JSON.stringify({ query, filters, orgProfile, ...options }),
+      body: JSON.stringify(this.withModelSettings({ query, filters, orgProfile, ...options })),
     });
 
     const { output, searchSteps, warning } = await this.resolveSearchOutput(start, onProgress);
@@ -166,7 +198,7 @@ class ApiService {
       warning?: string;
     }>('/api/deep-search', {
       method: 'POST',
-      body: JSON.stringify({ query, orgProfile, ...deepOpts }),
+      body: JSON.stringify(this.withModelSettings({ query, orgProfile, ...deepOpts })),
     });
 
     const resolved = start.synthesis
@@ -203,7 +235,7 @@ class ApiService {
     try {
       const startResult = await this.fetch<{ success: boolean; taskId: string }>('/api/discover-grants', {
         method: 'POST',
-        body: JSON.stringify({ query: 'new leads', orgProfile }),
+        body: JSON.stringify(this.withModelSettings({ query: 'new leads', orgProfile })),
       });
 
       const taskId = startResult.taskId;
@@ -253,7 +285,7 @@ class ApiService {
   async generateProposals(grantInfo: Grant, orgProfile: OrgProfile, count: number = 3): Promise<ProjectInfo[]> {
     const response = await this.fetch<{ success: boolean; proposals: ProjectInfo[] }>('/api/generate-proposals', {
       method: 'POST',
-      body: JSON.stringify({ grantInfo, orgProfile, count }),
+      body: JSON.stringify(this.withModelSettings({ grantInfo, orgProfile, count })),
     });
     return response.proposals || [];
   }
@@ -261,7 +293,7 @@ class ApiService {
   async generateApplication(grantInfo: Grant, projectInfo: ProjectInfo, orgProfile: OrgProfile): Promise<ApplicationDraft> {
     const response = await this.fetch<{ success: boolean; content: Record<string, unknown> }>('/api/generate-application', {
       method: 'POST',
-      body: JSON.stringify({ grantInfo, projectInfo, orgProfile }),
+      body: JSON.stringify(this.withModelSettings({ grantInfo, projectInfo, orgProfile })),
     });
 
     return {

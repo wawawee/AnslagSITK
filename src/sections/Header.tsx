@@ -13,6 +13,7 @@ const navItems = [
   { id: 'writer', label: 'Skriv ansökan', icon: 'FileText' },
   { id: 'drafts', label: 'Mina utkast', icon: 'Draft' },
   { id: 'intelligence', label: 'Agent', icon: 'Brain' },
+  { id: 'models', label: 'AI-modeller', icon: 'Sparkles' },
 ];
 
 export function Header({ activeTab, onTabChange, onLogout }: HeaderProps) {

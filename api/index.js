@@ -12,7 +12,8 @@ import {
   getOfficialSourcesStatus,
   downloadStiftelseRegister,
 } from './services/officialSources.js';
-import { getModelCandidates, MODEL_TIER } from './modelRouter.js';
+import { getModelCandidates, MODEL_TIER, resolveModelSettings } from './modelRouter.js';
+import { CURATED_MODELS, MODEL_PRESETS } from './curatedModels.js';
 import { isQdrantConfigured } from './qdrantConfig.js';
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from './embeddings.js';
 
@@ -228,7 +229,7 @@ async function openRouterChat(client, model, prompt, zoneName = 'unknown') {
 }
 
 // mode: 'pro' (synthesis/proposals) | 'reason' (planning/analysis) | 'fast' (quick tasks)
-async function generateWithFallback(prompt, mode = 'pro') {
+async function generateWithFallback(prompt, mode = 'pro', modelSettings = null) {
   if (mode === true) mode = 'pro';
   if (mode === false) mode = 'reason';
 
@@ -239,7 +240,7 @@ async function generateWithFallback(prompt, mode = 'pro') {
     }
 
     const models = zone.cascade
-      ? getModelCandidates(mode)
+      ? getModelCandidates(mode, modelSettings)
       : [zone.models[mode] || zone.models.pro];
 
     for (const model of models) {
@@ -566,6 +567,7 @@ async function runGrantSearchPipeline({
   targetCount = 8,
   searchMode = 'standard',
   taskId = null,
+  modelSettings = null,
 }) {
   const log = (message) => {
     if (taskId) updateTaskStatus(taskId, message);
@@ -622,7 +624,7 @@ Svar:`;
   let searchSteps = [];
   log('Planerar sökstrategi med AI...');
   try {
-    const planText = await generateWithFallback(planPrompt, 'reason');
+    const planText = await generateWithFallback(planPrompt, 'reason', modelSettings);
     const jsonMatch = planText.match(/\[[\s\S]*\]/);
     searchSteps = JSON.parse(jsonMatch ? jsonMatch[0] : planText);
     searchSteps = searchSteps
@@ -675,7 +677,7 @@ Regler:
 Använd EXAKT detta format per utlysning:
 ${GRANT_OUTPUT_FORMAT}`;
 
-  const output = await generateWithFallback(synthesisPrompt, 'pro');
+  const output = await generateWithFallback(synthesisPrompt, 'pro', modelSettings);
   log('Syntes klar — resultat redo');
   return {
     output,
@@ -703,14 +705,15 @@ function snapshotTask(taskId) {
 
 async function executeGrantSearchTask(taskId, reqBody, maxExaSteps, pipelineOpts = {}) {
   try {
-    const { query, filters, orgProfile, targetCount = 8, searchMode = 'standard' } = reqBody;
+    const { query, filters, orgProfile, targetCount = 8, searchMode = 'standard', modelSettings } = reqBody;
 
     if (!EXA_API_KEY) {
       updateTaskStatus(taskId, 'EXA_API_KEY saknas — använder endast AI-kunskap');
       const { orgName } = buildOrgSearchContext(orgProfile);
       const fallback = await generateWithFallback(
         `Lista 5-8 aktuella svenska utlysningar för ${orgName} relaterade till: "${query || orgProfile?.description}".${GRANT_OUTPUT_FORMAT}`,
-        'pro'
+        'pro',
+        modelSettings
       );
       const taskObj = discoveryTasks.get(taskId);
       if (taskObj) {
@@ -730,6 +733,7 @@ async function executeGrantSearchTask(taskId, reqBody, maxExaSteps, pipelineOpts
       targetCount,
       searchMode,
       taskId,
+      modelSettings,
       ...pipelineOpts,
     });
 
@@ -756,6 +760,58 @@ async function executeGrantSearchTask(taskId, reqBody, maxExaSteps, pipelineOpts
 
 app.get('/api/official-sources', (req, res) => {
   res.json({ success: true, ...getOfficialSourcesStatus() });
+});
+
+app.get('/api/models/curated', (req, res) => {
+  res.json({
+    success: true,
+    models: CURATED_MODELS,
+    presets: Object.values(MODEL_PRESETS),
+    envTier: MODEL_TIER,
+    pricingUrl: 'https://openrouter.ai/models',
+  });
+});
+
+/** Kvarvarande OpenRouter-kredit (kräver API-nyckel med rätt behörighet) */
+app.get('/api/openrouter/credits', async (req, res) => {
+  const apiKey =
+    process.env.OPENROUTER_MANAGEMENT_KEY?.trim() ||
+    process.env.OPENROUTER_API_KEY?.trim();
+  if (!apiKey) {
+    return res.json({ success: false, available: false, message: 'OPENROUTER_API_KEY saknas' });
+  }
+  try {
+    const r = await fetch('https://openrouter.ai/api/v1/credits', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      return res.json({
+        success: false,
+        available: false,
+        message:
+          r.status === 401 || r.status === 403
+            ? 'Kredit-API kräver ofta Management-nyckel (openrouter.ai/settings/keys)'
+            : `OpenRouter ${r.status}: ${text.slice(0, 120)}`,
+      });
+    }
+    const data = await r.json();
+    const total = data.data?.total_credits ?? data.total_credits ?? 0;
+    const used = data.data?.total_usage ?? data.total_usage ?? 0;
+    const remaining = Math.max(0, total - used);
+    return res.json({
+      success: true,
+      available: true,
+      totalCredits: total,
+      totalUsage: used,
+      remainingCredits: remaining,
+      currency: 'USD',
+      note: 'Visa aktuella modellpriser på openrouter.ai/models',
+    });
+  } catch (err) {
+    res.json({ success: false, available: false, message: err.message });
+  }
 });
 
 /** Lokal/admin: ladda ner stiftelseregister (~22 MB). Tar 1–3 min. */
@@ -811,7 +867,7 @@ app.post('/api/discover-grants', async (req, res) => {
 
   (async () => {
     try {
-      const { query = 'finansiering projektmedel 2026 riskkapital AI', orgProfile } = req.body;
+      const { query = 'finansiering projektmedel 2026 riskkapital AI', orgProfile, modelSettings } = req.body;
       const orgName = orgProfile?.name || 'Vår organisation';
 
       updateTaskStatus(taskId, `Planerar sökstrategi för ${orgName} via Azure...`);
@@ -822,7 +878,7 @@ Returnera ENDAST en JSON-array med 3 korta söksträngar (plain text, INTE objek
 Exempel: ["Vinnova utlysningar AI 2026", "Riskkapital seed AI startups Sverige", "Tillväxtverket digitaliseringsstöd SMF 2026"]
 Svar ENDAST JSON-arrayen:`;
 
-      const planText = await generateWithFallback(planPrompt, 'reason');
+      const planText = await generateWithFallback(planPrompt, 'reason', modelSettings);
       let searchSteps = [];
       try {
         const jsonMatch = planText.match(/\[[\s\S]*\]/);
@@ -876,7 +932,7 @@ Använd EXAKT detta format:
 - **Relevans**: [Varför passar detta?]
 - **URL**: [https://...]`;
 
-      const finalOutput = await generateWithFallback(synthesisPrompt, 'pro');
+      const finalOutput = await generateWithFallback(synthesisPrompt, 'pro', modelSettings);
       updateTaskStatus(taskId, '✓ Discovery slutförd!');
 
       const taskObj = discoveryTasks.get(taskId);
@@ -983,7 +1039,7 @@ app.post('/api/export-grants-pdf', async (req, res) => {
 // Djupanalys av en utlysning: liknande beviljade projekt, krav, tips
 app.post('/api/grant-intelligence', async (req, res) => {
   try {
-    const { grantInfo, orgProfile } = req.body;
+    const { grantInfo, orgProfile, modelSettings } = req.body;
     if (!grantInfo?.name) {
       return res.status(400).json({ error: 'grantInfo.name krävs' });
     }
@@ -1040,7 +1096,7 @@ Regler:
 - Skriv på svenska.
 - Bara verkliga URL:er från sökresultaten.`;
 
-    const raw = await generateWithFallback(synthesisPrompt, 'pro');
+    const raw = await generateWithFallback(synthesisPrompt, 'pro', modelSettings);
     let parsed;
     try {
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -1079,7 +1135,7 @@ Regler:
 
 app.post('/api/generate-proposals', async (req, res) => {
   try {
-    const { grantInfo, orgProfile, count = 3 } = req.body;
+    const { grantInfo, orgProfile, count = 3, modelSettings } = req.body;
     const prompt = `Skapa ${count} olika unika projektförslag (ProjectInfo) för: ${orgProfile.name}.
 Organisationens beskrivning: ${orgProfile.description}
 Utlysning/Finansiär: ${JSON.stringify(grantInfo, null, 2)}
@@ -1094,7 +1150,7 @@ Returnera ENDAST en JSON-array med ${count} objekt som matchar detta exakta grä
   "timeline": "String",
   "partners": ["Partner 1", "Partner 2"]
 }`;
-    const text = await generateWithFallback(prompt, 'pro');
+    const text = await generateWithFallback(prompt, 'pro', modelSettings);
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     const proposals = JSON.parse(jsonMatch ? jsonMatch[0] : '[]');
     res.json({ success: true, proposals });
@@ -1105,7 +1161,7 @@ Returnera ENDAST en JSON-array med ${count} objekt som matchar detta exakta grä
 
 app.post('/api/generate-application', async (req, res) => {
   try {
-    const { grantInfo, projectInfo, orgProfile } = req.body;
+    const { grantInfo, projectInfo, orgProfile, modelSettings } = req.body;
     const prompt = `Skriv ett professionellt ansökningsutkast för ${orgProfile?.name || 'organisationen'}.
 Organisation: ${JSON.stringify(orgProfile, null, 2)}
 UTLYSNING: ${JSON.stringify(grantInfo, null, 2)}
@@ -1122,7 +1178,7 @@ Returnera ett JSON-objekt med dessa fält EXAKT (för React-klienten):
   "dissemination": "Nyttjanderätt och spridning..."
 }`;
 
-    const text = await generateWithFallback(prompt, 'pro');
+    const text = await generateWithFallback(prompt, 'pro', modelSettings);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     const content = JSON.parse(jsonMatch ? jsonMatch[0] : '{}');
     res.json({ success: true, content });

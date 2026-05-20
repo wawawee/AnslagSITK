@@ -2,6 +2,7 @@ import { Login } from '@/components/Login';
 import { loadStoredProfile } from '@/components/OrgProfileCard';
 import { Toaster } from '@/components/ui/sonner';
 import { AgentIntelligence } from '@/sections/AgentIntelligence';
+import { ModelSettingsPanel } from '@/sections/ModelSettings';
 import { ApplicationWriter } from '@/sections/ApplicationWriter';
 import { DraftsList } from '@/sections/DraftsList';
 import { GrantSearch } from '@/sections/GrantSearch';
@@ -79,6 +80,10 @@ function App() {
 
         {activeTab === 'intelligence' && (
           <AgentIntelligence />
+        )}
+
+        {activeTab === 'models' && (
+          <ModelSettingsPanel />
         )}
       </main>
 
