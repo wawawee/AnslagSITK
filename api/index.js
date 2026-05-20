@@ -299,6 +299,9 @@ async function runExaSearch(query, taskId = null) {
 // --- Task tracking ---
 const discoveryTasks = new Map();
 
+/** Vercel serverless: varje request = ny process — in-memory tasks fungerar inte mellan poll-anrop. */
+const useInlineGrantSearch = () => !!process.env.VERCEL;
+
 function updateTaskStatus(taskId, message) {
   const task = discoveryTasks.get(taskId);
   if (task) {
@@ -683,6 +686,21 @@ ${GRANT_OUTPUT_FORMAT}`;
   };
 }
 
+function snapshotTask(taskId) {
+  const task = discoveryTasks.get(taskId);
+  if (!task) return null;
+  return {
+    result: task.result,
+    searchSteps: task.searchSteps || [],
+    completed: task.completed,
+    status: task.status,
+    warning: task.warning,
+    source: task.source,
+    officialSources: task.officialSources,
+    officialCount: task.officialCount,
+  };
+}
+
 async function executeGrantSearchTask(taskId, reqBody, maxExaSteps, pipelineOpts = {}) {
   try {
     const { query, filters, orgProfile, targetCount = 8, searchMode = 'standard' } = reqBody;
@@ -701,7 +719,7 @@ async function executeGrantSearchTask(taskId, reqBody, maxExaSteps, pipelineOpts
         taskObj.status = 'Klar (utan Exa)';
         taskObj.warning = 'EXA_API_KEY saknas';
       }
-      return;
+      return snapshotTask(taskId);
     }
 
     const { output, searchSteps, usedExa, officialSources, officialCount } = await runGrantSearchPipeline({
@@ -725,12 +743,14 @@ async function executeGrantSearchTask(taskId, reqBody, maxExaSteps, pipelineOpts
       taskObj.completed = true;
       taskObj.status = 'Klar!';
     }
+    return snapshotTask(taskId);
   } catch (error) {
     const taskObj = discoveryTasks.get(taskId);
     if (taskObj) {
       taskObj.status = `Fel: ${error.message}`;
       taskObj.completed = true;
     }
+    return snapshotTask(taskId);
   }
 }
 
@@ -748,7 +768,7 @@ app.post('/api/admin/sync-stiftelser', async (req, res) => {
   }
 });
 
-app.post('/api/search-grants', (req, res) => {
+app.post('/api/search-grants', async (req, res) => {
   const { targetCount = 8, searchMode = 'standard' } = req.body;
   const steps = EXA_API_KEY ? exaStepsForMode(searchMode, targetCount) : 0;
   const taskId = `search-${Date.now()}`;
@@ -760,8 +780,25 @@ app.post('/api/search-grants', (req, res) => {
     searchSteps: [],
     completed: false,
   });
-  res.json({ success: true, taskId });
 
+  if (useInlineGrantSearch()) {
+    try {
+      const done = await executeGrantSearchTask(taskId, req.body, steps);
+      if (!done?.result) {
+        return res.status(500).json({ success: false, error: done?.status || 'Sökningen misslyckades' });
+      }
+      return res.json({
+        success: true,
+        output: done.result,
+        searchSteps: done.searchSteps,
+        warning: done.warning,
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  res.json({ success: true, taskId });
   executeGrantSearchTask(taskId, req.body, steps);
 });
 
@@ -865,7 +902,7 @@ app.get('/api/discovery-status/:taskId', (req, res) => {
   res.json(task);
 });
 
-app.post('/api/deep-search', (req, res) => {
+app.post('/api/deep-search', async (req, res) => {
   const { targetCount = 12, searchMode = 'broad' } = req.body;
   const steps = EXA_API_KEY ? exaStepsForMode(searchMode, targetCount) : 0;
   const taskId = `deep-${Date.now()}`;
@@ -877,6 +914,25 @@ app.post('/api/deep-search', (req, res) => {
     searchSteps: [],
     completed: false,
   });
+
+  if (useInlineGrantSearch()) {
+    try {
+      const done = await executeGrantSearchTask(taskId, req.body, steps);
+      if (!done?.result) {
+        return res.status(500).json({ success: false, error: done?.status || 'Djupsökning misslyckades' });
+      }
+      return res.json({
+        success: true,
+        synthesis: done.result,
+        output: done.result,
+        searchSteps: done.searchSteps,
+        warning: done.warning,
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
   res.json({ success: true, taskId });
   executeGrantSearchTask(taskId, req.body, steps);
 });

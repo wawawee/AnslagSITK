@@ -93,7 +93,7 @@ class ApiService {
           if (msg.includes('404') || msg.toLowerCase().includes('task not found')) {
             reject(
               new Error(
-                'Task not found — starta om API (Ctrl+C, sedan npm run dev:all). Flera gamla node-processer på port 3001 ger detta fel.'
+                'Task not found — lokalt: Ctrl+C och kör npm run dev:all (enda API på port 3001). På Vercel: redeploy senaste kod (sök ska köras inline utan poll).'
               )
             );
           } else {
