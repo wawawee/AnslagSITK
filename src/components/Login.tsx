@@ -18,8 +18,8 @@ export function Login({ onLogin }: LoginProps) {
     e.preventDefault();
     setLoading(true);
 
-    // Simple password check as requested
-    if (password === 'samithecrab') {
+    const ok = password === 'pelle' || password === 'samithecrab' || password === 'pell0pell0';
+    if (ok) {
       localStorage.setItem('sitk-admin-auth', 'true');
       toast.success('Inloggad som administratör');
       onLogin();

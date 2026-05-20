@@ -7,7 +7,7 @@ export interface Grant {
   description: string;
   url?: string;
   relevance?: string;
-  category: 'vinnova' | 'tillvaxtverket' | 'region' | 'eu' | 'other';
+  category: 'vinnova' | 'tillvaxtverket' | 'region' | 'eu' | 'stiftelse' | 'other';
   status: 'open' | 'closing_soon' | 'closed';
 }
 
@@ -71,6 +71,14 @@ export interface SearchFilters {
   deadline?: string;
 }
 
+/** Inställningar för utlysningssökning */
+export interface GrantSearchOptions {
+  /** Önskat antal utlysningar i svaret (ca) */
+  targetCount?: number;
+  /** quick=2 Exa, standard=4, broad=6 + stiftelser/fonder */
+  searchMode?: 'quick' | 'standard' | 'broad';
+}
+
 export interface DeepSearchStepResult {
   step: string;
   output?: string;
@@ -82,6 +90,7 @@ export interface DeepSearchResponse {
   plan: string[];
   rawResults: DeepSearchStepResult[];
   synthesis: string;
+  warning?: string;
 }
 
 export interface SimilarFundedProject {

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:api": "node api/index.js",
-    "dev:all": "node api/index.js & vite",
+    "dev:all": "bash scripts/dev-all.sh",
     "validate": "node scripts/validate-env.mjs",
     "test:models": "node scripts/test-openrouter-models.mjs",
     "qdrant:up": "docker compose -f docker-compose.qdrant.yml up -d",

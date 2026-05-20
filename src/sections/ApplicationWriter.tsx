@@ -7,7 +7,8 @@ import { Progress } from '@/components/ui/progress';
 import { Textarea } from '@/components/ui/textarea';
 import { apiService } from '@/services/api';
 import type { ApplicationDraft, Grant, ProjectInfo, OrgProfile } from '@/types';
-import { BookOpen, Building2, Calendar, ChevronLeft, ChevronRight, Clock, Download, Euro, FileText, Lightbulb, Save, Share2, Sparkles, Target, Users, Wallet, Wand2 } from 'lucide-react';
+import { SekIcon } from '@/components/SekIcon';
+import { BookOpen, Building2, Calendar, ChevronLeft, ChevronRight, Clock, Download, FileText, Lightbulb, Save, Share2, Sparkles, Target, Users, Wallet, Wand2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -214,7 +215,7 @@ export function ApplicationWriter({ selectedGrant, orgProfile: externalProfile }
               </span>
               {selectedGrant.maxAmount && (
                 <span className="flex items-center gap-1">
-                  <Euro className="h-4 w-4" />
+                  <SekIcon className="text-xs" />
                   {selectedGrant.maxAmount}
                 </span>
               )}

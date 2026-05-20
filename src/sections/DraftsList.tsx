@@ -4,7 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { ApplicationDraft } from '@/types';
-import { Calendar, Download, Edit, Euro, FileText, FileType, Trash2 } from 'lucide-react';
+import { SekIcon } from '@/components/SekIcon';
+import { Calendar, Download, Edit, FileText, FileType, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { apiService } from '@/services/api';
@@ -146,7 +147,7 @@ ${draft.content.dissemination}
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 {draft.projectInfo.budget && (
                   <span className="flex items-center gap-1">
-                    <Euro className="h-3 w-3" />
+                    <SekIcon className="text-[9px]" />
                     {draft.projectInfo.budget}
                   </span>
                 )}

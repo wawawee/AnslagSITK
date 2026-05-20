@@ -1,20 +1,36 @@
-import type { ApplicationDraft, DeepSearchResponse, Grant, GrantIntelligence, ProjectInfo, SearchFilters, OrgProfile, FundingEntity, PortfolioAccount, PortfolioAccountDetail } from '@/types';
+import type { ApplicationDraft, DeepSearchResponse, Grant, GrantIntelligence, ProjectInfo, SearchFilters, OrgProfile, FundingEntity, PortfolioAccount, PortfolioAccountDetail, GrantSearchOptions } from '@/types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 class ApiService {
   private async fetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Kan inte nå API (${API_BASE_URL || 'samma origin'}${endpoint}). Kör npm run dev:all — ${msg}`
+      );
+    }
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(error.error || `HTTP error! status: ${response.status}`);
+      const text = await response.text();
+      let message = `HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(text) as { error?: string };
+        if (parsed.error) message = parsed.error;
+      } catch {
+        if (text && text.length < 200) message = text;
+        else if (response.status === 404) message = 'API-endpoint hittades inte — starta om backend (npm run dev:all)';
+      }
+      throw new Error(message);
     }
 
     return response.json() as Promise<T>;
@@ -34,30 +50,136 @@ class ApiService {
     });
   }
 
-  async searchGrants(query: string, filters?: SearchFilters, useDeepSearch: boolean = false, orgProfile?: OrgProfile): Promise<Grant[]> {
-    if (useDeepSearch) {
-      const deepResult = await this.deepSearch(query, orgProfile);
-      return this.parseGrantsFromOutput(deepResult.synthesis);
+  async pollSearchTask(
+    taskId: string,
+    onProgress?: (status: string, logs: { timestamp: string; message: string }[]) => void
+  ): Promise<{ output: string; searchSteps?: string[]; warning?: string }> {
+    if (!taskId || taskId === 'undefined') {
+      throw new Error(
+        'Ogiltigt sök-task — troligen gammal API-process på port 3001. Stoppa alla node-processer och kör: npm run dev:all'
+      );
     }
 
-    const result = await this.fetch<{ output?: string; warning?: string }>('/api/search-grants', {
+    return new Promise((resolve, reject) => {
+      const poll = async () => {
+        try {
+          const statusResult = await this.fetch<{
+            status: string;
+            logs: { timestamp: string; message: string }[];
+            result: string | null;
+            searchSteps?: string[];
+            completed: boolean;
+            warning?: string;
+            error?: string;
+          }>(`/api/discovery-status/${taskId}`);
+
+          onProgress?.(statusResult.status, statusResult.logs || []);
+
+          if (statusResult.completed) {
+            if (statusResult.result) {
+              resolve({
+                output: statusResult.result,
+                searchSteps: statusResult.searchSteps,
+                warning: statusResult.warning,
+              });
+            } else {
+              reject(new Error(statusResult.status || statusResult.error || 'Sökningen misslyckades'));
+            }
+            return;
+          }
+          setTimeout(poll, 1200);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes('404') || msg.toLowerCase().includes('task not found')) {
+            reject(
+              new Error(
+                'Task not found — starta om API (Ctrl+C, sedan npm run dev:all). Flera gamla node-processer på port 3001 ger detta fel.'
+              )
+            );
+          } else {
+            reject(err);
+          }
+        }
+      };
+      poll();
+    });
+  }
+
+  private async resolveSearchOutput(
+    start: { taskId?: string; output?: string; warning?: string; searchSteps?: string[] },
+    onProgress?: (status: string, logs: { timestamp: string; message: string }[]) => void
+  ): Promise<{ output: string; searchSteps: string[]; warning?: string }> {
+    if (start.output) {
+      onProgress?.('Klar (synkront API-svar)', []);
+      return { output: start.output, searchSteps: start.searchSteps || [], warning: start.warning };
+    }
+    if (!start.taskId) {
+      throw new Error(
+        'API svarade utan taskId. Stoppa gamla servrar och kör om: npm run dev:all'
+      );
+    }
+    const polled = await this.pollSearchTask(start.taskId, onProgress);
+    return { output: polled.output, searchSteps: polled.searchSteps || [], warning: polled.warning };
+  }
+
+  async searchGrants(
+    query: string,
+    filters?: SearchFilters,
+    orgProfile?: OrgProfile,
+    onProgress?: (status: string, logs: { timestamp: string; message: string }[]) => void,
+    options?: GrantSearchOptions
+  ): Promise<{ grants: Grant[]; searchSteps: string[] }> {
+    const start = await this.fetch<{
+      taskId?: string;
+      output?: string;
+      warning?: string;
+      searchSteps?: string[];
+    }>('/api/search-grants', {
       method: 'POST',
-      body: JSON.stringify({ query, filters, orgProfile }),
+      body: JSON.stringify({ query, filters, orgProfile, ...options }),
     });
 
-    if (result.warning) {
-      console.warn('[AnslagSITK]', result.warning);
-    }
+    const { output, searchSteps, warning } = await this.resolveSearchOutput(start, onProgress);
+    if (warning) console.warn('[AnslagSITK]', warning);
 
-    if (result.output) {
-      const grants = this.parseGrantsFromOutput(result.output);
-      if (grants.length === 0) {
-        throw new Error('Sökningen gav inga parsbara utlysningar — prova Deep Search eller annat sökord');
-      }
-      return grants;
+    const grants = this.parseGrantsFromOutput(output);
+    if (grants.length === 0) {
+      throw new Error('Sökningen gav inga parsbara utlysningar — prova annat sökord eller Deep Search');
     }
+    return { grants, searchSteps };
+  }
 
-    throw new Error('Tomt svar från API');
+  async deepSearchWithProgress(
+    query: string,
+    orgProfile?: OrgProfile,
+    onProgress?: (status: string, logs: { timestamp: string; message: string }[]) => void,
+    options?: GrantSearchOptions
+  ): Promise<DeepSearchResponse> {
+    const deepOpts: GrantSearchOptions = {
+      targetCount: options?.targetCount ?? 12,
+      searchMode: options?.searchMode ?? 'broad',
+    };
+    const start = await this.fetch<{
+      taskId?: string;
+      output?: string;
+      synthesis?: string;
+      warning?: string;
+    }>('/api/deep-search', {
+      method: 'POST',
+      body: JSON.stringify({ query, orgProfile, ...deepOpts }),
+    });
+
+    const resolved = start.synthesis
+      ? { output: start.synthesis, searchSteps: [] as string[], warning: start.warning }
+      : await this.resolveSearchOutput(start, onProgress);
+
+    return {
+      success: true,
+      plan: resolved.searchSteps,
+      rawResults: [],
+      synthesis: resolved.output,
+      ...(resolved.warning ? { warning: resolved.warning } : {}),
+    };
   }
 
   async checkHealth(): Promise<{ status: string; search?: string }> {
@@ -157,7 +279,7 @@ class ApiService {
     localStorage.removeItem('sitk-discovered-grants');
   }
 
-  private parseGrantsFromOutput(output: string): Grant[] {
+  parseGrantsFromOutput(output: string): Grant[] {
     const grants: Grant[] = [];
     const sections = output.split(/(?=^## |^\*\*)/m).filter(s => s.trim().length > 20);
 
@@ -215,7 +337,13 @@ class ApiService {
       else if (funderLower.includes('tillväxtverket') || nameLower.includes('tillväxtverket')) grant.category = 'tillvaxtverket';
       else if (funderLower.includes('region') || funderLower.includes('länsstyrelsen') || funderLower.includes('kommun')) grant.category = 'region';
       else if (funderLower.includes('eu') || funderLower.includes('digital europe') || funderLower.includes('horizon') || funderLower.includes('interreg')) grant.category = 'eu';
-      else grant.category = 'other';
+      else if (
+        /stiftelse|fond|postkod|arvsfonden|kamprad|göransson|familjen|wallenberg|riksbankens jubileumsfond|rf\.nu/i.test(
+          `${funderLower} ${nameLower}`
+        )
+      ) {
+        grant.category = 'stiftelse';
+      } else grant.category = 'other';
 
       grant.id = `grant-ds-${Date.now()}-${grants.length}`;
       grant.status = 'open';
@@ -269,6 +397,27 @@ class ApiService {
     } catch {
       return null;
     }
+  }
+
+  async exportGrantsPdf(grants: Grant[], title: string, orgName?: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/export-grants-pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grants, title, orgName }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error || 'PDF-export misslyckades');
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `utlysningar-${Date.now()}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   // --- PDF Export ---

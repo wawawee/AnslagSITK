@@ -1,4 +1,6 @@
+import { GrantListActions } from '@/components/GrantListActions';
 import { OrgProfileCard } from '@/components/OrgProfileCard';
+import { SearchProgressPanel } from '@/components/SearchProgressPanel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,8 +9,11 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { apiService } from '@/services/api';
-import type { Grant, GrantIntelligence, OrgProfile, SearchFilters } from '@/types';
-import { AlertCircle, Building2, Calendar, CheckCircle2, Clock, Euro, ExternalLink, Filter, Layers, Loader2, Search } from 'lucide-react';
+import type { Grant, GrantIntelligence, GrantSearchOptions, OrgProfile, SearchFilters } from '@/types';
+import { mergeGrants } from '@/utils/mergeGrants';
+import { SekIcon } from '@/components/SekIcon';
+import { AlertCircle, Building2, Calendar, CheckCircle2, Clock, ExternalLink, Filter, Layers, Loader2, Search } from 'lucide-react';
+import type { SearchLogEntry } from '@/components/SearchProgressPanel';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -17,6 +22,7 @@ const categoryColors: Record<string, string> = {
   tillvaxtverket: 'bg-green-100 text-green-800 border-green-200',
   region: 'bg-purple-100 text-purple-800 border-purple-200',
   eu: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+  stiftelse: 'bg-amber-100 text-amber-900 border-amber-200',
   other: 'bg-gray-100 text-gray-800 border-gray-200',
 };
 
@@ -25,6 +31,7 @@ const categoryLabels: Record<string, string> = {
   tillvaxtverket: 'Tillväxtverket',
   region: 'Regionalt',
   eu: 'EU-medel',
+  stiftelse: 'Stiftelse/fond',
   other: 'Övrigt',
 };
 
@@ -51,6 +58,31 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
   const [intelligence, setIntelligence] = useState<GrantIntelligence | null>(null);
   const [intelligenceLoading, setIntelligenceLoading] = useState(false);
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
+  const [searchStatus, setSearchStatus] = useState('');
+  const [searchLogs, setSearchLogs] = useState<SearchLogEntry[]>([]);
+  const [verboseSearch, setVerboseSearch] = useState(true);
+  const [targetCount, setTargetCount] = useState(10);
+  const [searchMode, setSearchMode] = useState<GrantSearchOptions['searchMode']>('standard');
+
+  const searchOptions: GrantSearchOptions = { targetCount, searchMode };
+
+  const appendSearchResults = (incoming: Grant[]) => {
+    setGrants(prev => {
+      const { merged, added, skipped } = mergeGrants(prev, incoming);
+      apiService.saveDiscoveredGrants(merged);
+      if (added > 0) {
+        toast.success(`+${added} nya utlysningar (${merged.length} totalt i listan)`);
+      } else {
+        toast.message(`Inga nya träffar — ${skipped} fanns redan (${merged.length} totalt)`);
+      }
+      return merged;
+    });
+  };
+
+  const onSearchProgress = (status: string, logs: SearchLogEntry[]) => {
+    setSearchStatus(status);
+    setSearchLogs(logs);
+  };
 
   useEffect(() => {
     const savedGrants = apiService.loadDiscoveredGrants();
@@ -69,21 +101,25 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
     }
     setLoading(true);
     setDeepSearchSynthesis(null);
+    setSearchLogs([]);
+    setSearchStatus('Startar...');
     try {
-      const results = await apiService.searchGrants(
+      const profile = orgProfile.name || orgProfile.description ? orgProfile : undefined;
+      const { grants: results, searchSteps } = await apiService.searchGrants(
         searchQuery,
         filters,
-        false,
-        orgProfile.name || orgProfile.description ? orgProfile : undefined
+        profile,
+        onSearchProgress,
+        searchOptions
       );
-      setGrants(results);
-      apiService.saveDiscoveredGrants(results);
-      toast.success(`Hittade ${results.length} utlysningar (live-sökning)`);
+      appendSearchResults(results);
+      setResearchSteps(searchSteps);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Kunde inte söka utlysningar';
       toast.error(msg);
     } finally {
       setLoading(false);
+      setSearchStatus('');
     }
   };
 
@@ -91,7 +127,7 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
     apiService.clearDiscoveredGrants();
     setGrants([]);
     setDeepSearchSynthesis(null);
-    toast.message('Sparade utlysningar rensade');
+    toast.message('Aktiv lista rensad (sparade kopior finns kvar under Spara kopia)');
   };
 
   const handleGrantIntelligence = async (grant: Grant) => {
@@ -118,31 +154,32 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
     }
 
     setLoading(true);
+    setSearchLogs([]);
+    setSearchStatus('Startar djupsökning...');
     try {
-      const result = await apiService.deepSearch(searchQuery, orgProfile.name ? orgProfile : undefined);
+      const profile = orgProfile.name || orgProfile.description ? orgProfile : undefined;
+      const result = await apiService.deepSearchWithProgress(searchQuery, profile, onSearchProgress, {
+        targetCount: Math.max(targetCount, 12),
+        searchMode: 'broad',
+      });
 
       if (result.success) {
         setDeepSearchSynthesis(result.synthesis);
         setResearchSteps(result.plan);
-        toast.success('Djupsökning slutförd');
-
-        // Try to parse the synthesis for grants
-        const parsedGrants = await apiService.searchGrants(
-          searchQuery,
-          filters,
-          true,
-          orgProfile.name || orgProfile.description ? orgProfile : undefined
-        );
+        const parsedGrants = apiService.parseGrantsFromOutput(result.synthesis);
         if (parsedGrants.length > 0) {
-          setGrants(parsedGrants);
-          apiService.saveDiscoveredGrants(parsedGrants);
+          appendSearchResults(parsedGrants);
+        } else {
+          toast.warning('Djupsökning klar men inga nya utlysningar kunde parsas');
         }
+        if (result.warning) toast.warning(result.warning);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Djupsökning misslyckades';
       toast.error(msg);
     } finally {
       setLoading(false);
+      setSearchStatus('');
     }
   };
 
@@ -161,7 +198,7 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
         <div className="relative z-10">
           <h2 className="text-2xl md:text-3xl font-bold mb-2 tracking-tight">Hitta rätt finansiering</h2>
           <p className="text-blue-100 mb-2 max-w-2xl font-medium">
-            Sök bland aktuella utlysningar från Vinnova, Tillväxtverket, EU och andra finansiärer med hjälp av AI-driven analys.
+            Sök brett bland myndigheter, regioner, EU, stiftelser och fonder. Varje sökning läggs till i listan (dubbletter filtreras bort).
           </p>
           {apiOnline === false && (
             <p className="text-amber-100 text-sm mb-4">
@@ -196,17 +233,15 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
                   </div>
                 ) : 'Sök'}
               </Button>
-              {grants.length > 0 && (
-                <Button
-                  type="button"
-                  onClick={handleClearSaved}
-                  disabled={loading}
-                  variant="secondary"
-                  className="bg-white/10 text-white hover:bg-white/20 h-12 px-4 border border-white/20 rounded-xl text-sm"
-                >
-                  Rensa lista
-                </Button>
-              )}
+              <label className="flex items-center gap-2 text-xs text-blue-100 px-2">
+                <input
+                  type="checkbox"
+                  checked={verboseSearch}
+                  onChange={e => setVerboseSearch(e.target.checked)}
+                  className="rounded"
+                />
+                Verbose
+              </label>
               <Button
                 onClick={handleDeepSearch}
                 disabled={loading}
@@ -223,10 +258,58 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
               </Button>
             </div>
           </div>
+          <div className="flex flex-wrap items-center gap-3 mt-4 pt-3 border-t border-white/20">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-blue-100 whitespace-nowrap">Mål antal:</span>
+              <Select value={String(targetCount)} onValueChange={v => setTargetCount(Number(v))}>
+                <SelectTrigger className="h-9 w-[88px] bg-white/10 border-white/20 text-white text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[5, 8, 10, 15, 20].map(n => (
+                    <SelectItem key={n} value={String(n)}>{n} st</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-blue-100 whitespace-nowrap">Bredd:</span>
+              <Select
+                value={searchMode || 'standard'}
+                onValueChange={v => setSearchMode(v as GrantSearchOptions['searchMode'])}
+              >
+                <SelectTrigger className="h-9 w-[min(100%,220px)] bg-white/10 border-white/20 text-white text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="quick">Snabb (2 källor)</SelectItem>
+                  <SelectItem value="standard">Standard</SelectItem>
+                  <SelectItem value="broad">Bred (stiftelser + fonder)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </div>
       </div>
 
 
+
+      <SearchProgressPanel
+        active={loading}
+        status={searchStatus}
+        logs={searchLogs}
+        verbose={verboseSearch}
+      />
+
+      <GrantListActions
+        grants={grants}
+        orgName={orgProfile.name || 'SITK'}
+        onLoadGrants={g => {
+          setGrants(g);
+          apiService.saveDiscoveredGrants(g);
+        }}
+        onClear={handleClearSaved}
+      />
 
       {/* Deep Search Report */}
       {deepSearchSynthesis && (
@@ -298,6 +381,7 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
               <SelectItem value="tillvaxtverket">Tillväxtverket</SelectItem>
               <SelectItem value="region">Regionalt</SelectItem>
               <SelectItem value="eu">EU-medel</SelectItem>
+              <SelectItem value="stiftelse">Stiftelse/fond</SelectItem>
               <SelectItem value="other">Övrigt</SelectItem>
             </SelectContent>
           </Select>
@@ -323,10 +407,12 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
 
       {/* Results */}
       <Tabs defaultValue="all" className="w-full">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-3 md:grid-cols-6">
           <TabsTrigger value="all">Alla ({grants.length})</TabsTrigger>
           <TabsTrigger value="vinnova">Vinnova</TabsTrigger>
-          <TabsTrigger value="regional">Regionalt</TabsTrigger>
+          <TabsTrigger value="tillvaxt">Tillväxtv.</TabsTrigger>
+          <TabsTrigger value="regional">Region</TabsTrigger>
+          <TabsTrigger value="stiftelse">Stiftelser</TabsTrigger>
           <TabsTrigger value="eu">EU</TabsTrigger>
         </TabsList>
 
@@ -364,9 +450,37 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
           </div>
         </TabsContent>
 
+        <TabsContent value="tillvaxt" className="mt-6">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {grants.filter(g => g.category === 'tillvaxtverket').map((grant) => (
+              <GrantCard
+                key={grant.id}
+                grant={grant}
+                orgName={orgProfile.name}
+                onSelect={() => setSelectedGrant(grant)}
+                onWriteApplication={() => onSelectGrant(grant)}
+              />
+            ))}
+          </div>
+        </TabsContent>
+
         <TabsContent value="regional" className="mt-6">
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {grants.filter(g => g.category === 'tillvaxtverket' || g.category === 'region').map((grant) => (
+            {grants.filter(g => g.category === 'region').map((grant) => (
+              <GrantCard
+                key={grant.id}
+                grant={grant}
+                orgName={orgProfile.name}
+                onSelect={() => setSelectedGrant(grant)}
+                onWriteApplication={() => onSelectGrant(grant)}
+              />
+            ))}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="stiftelse" className="mt-6">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {grants.filter(g => g.category === 'stiftelse').map((grant) => (
               <GrantCard
                 key={grant.id}
                 grant={grant}
@@ -428,7 +542,7 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
                   </div>
                   {selectedGrant.maxAmount && (
                     <div className="flex items-center gap-2">
-                      <Euro className="h-4 w-4 text-muted-foreground" />
+                      <SekIcon className="h-4 w-4 text-xs text-muted-foreground" />
                       <span>Max: <strong>{selectedGrant.maxAmount}</strong></span>
                     </div>
                   )}
@@ -630,7 +744,7 @@ function GrantCard({ grant, orgName, onSelect, onWriteApplication }: GrantCardPr
           </div>
           {grant.maxAmount && (
             <div className="flex items-center gap-1.5 text-slate-300 bg-white/5 py-1 px-2 rounded-md">
-              <Euro className="h-3.5 w-3.5 text-cyan-400" />
+              <SekIcon className="text-[10px] text-cyan-400" />
               <span className="font-medium">{grant.maxAmount}</span>
             </div>
           )}
