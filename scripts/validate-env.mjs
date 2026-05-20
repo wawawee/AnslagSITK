@@ -76,6 +76,19 @@ for (const [envName, label] of OR_KEYS) {
   }
 }
 
+const officialKeys = [
+  ['GDP_API_KEY_VINNOVA', 'GDP Vinnova'],
+  ['GDP_API_KEY_FORMAS', 'GDP Formas'],
+  ['GDP_API_KEY_FORTE', 'GDP Forte'],
+  ['GDP_API_KEY_VR', 'GDP VR'],
+  ['SWECRIS_API_KEY', 'Swecris'],
+];
+console.log('\nOfficiella register:');
+for (const [envName, label] of officialKeys) {
+  const key = process.env[envName]?.trim();
+  console.log(key ? `  ✓ ${label}: satt` : `  ○ ${label}: saknas`);
+}
+
 const exa = process.env.EXA_API_KEY?.trim();
 if (!exa) {
   console.log('\nExa: ○ saknas (sökning använder LLM-fallback)');
