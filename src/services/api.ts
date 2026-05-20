@@ -182,7 +182,16 @@ class ApiService {
     };
   }
 
-  async checkHealth(): Promise<{ status: string; search?: string }> {
+  async checkHealth(): Promise<{
+    status: string;
+    search?: string;
+    apiVersion?: string;
+    officialSources?: {
+      gdp: { configured: number; agencies: string[]; portal: string };
+      stiftelser: { indexReady: boolean; rawCached: boolean; syncCommand: string };
+      swecris: { configured: boolean; portal: string };
+    };
+  }> {
     return this.fetch('/api/health');
   }
 

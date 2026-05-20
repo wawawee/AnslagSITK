@@ -58,6 +58,7 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
   const [intelligence, setIntelligence] = useState<GrantIntelligence | null>(null);
   const [intelligenceLoading, setIntelligenceLoading] = useState(false);
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
+  const [officialHint, setOfficialHint] = useState<string | null>(null);
   const [searchStatus, setSearchStatus] = useState('');
   const [searchLogs, setSearchLogs] = useState<SearchLogEntry[]>([]);
   const [verboseSearch, setVerboseSearch] = useState(true);
@@ -90,7 +91,17 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
       setGrants(savedGrants);
     }
     apiService.checkHealth()
-      .then(h => setApiOnline(h.status === 'ok' || h.status === 'degraded'))
+      .then(h => {
+        setApiOnline(h.status === 'ok' || h.status === 'degraded');
+        const os = h.officialSources;
+        if (!os) return;
+        const parts: string[] = [];
+        if (os.gdp.configured > 0) parts.push(`GDP (${os.gdp.configured} myndigheter)`);
+        if (os.stiftelser.indexReady) parts.push('stiftelseregister');
+        else parts.push('stiftelser: kör npm run sync:stiftelser');
+        if (os.swecris.configured) parts.push('Swecris');
+        setOfficialHint(parts.join(' · '));
+      })
       .catch(() => setApiOnline(false));
   }, []);
 
@@ -206,7 +217,10 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
             </p>
           )}
           {apiOnline === true && (
-            <p className="text-blue-200/80 text-xs mb-4">Live-sökning via Exa + OpenRouter</p>
+            <p className="text-blue-200/80 text-xs mb-4">
+              Exa + OpenRouter
+              {officialHint ? ` · Register: ${officialHint}` : ''}
+            </p>
           )}
 
           <div className="flex flex-col md:flex-row gap-4">

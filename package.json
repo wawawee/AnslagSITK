@@ -8,6 +8,7 @@
     "dev:api": "node api/index.js",
     "dev:all": "bash scripts/dev-all.sh",
     "validate": "node scripts/validate-env.mjs",
+    "sync:stiftelser": "node scripts/sync-stiftelser.mjs",
     "test:models": "node scripts/test-openrouter-models.mjs",
     "qdrant:up": "docker compose -f docker-compose.qdrant.yml up -d",
     "qdrant:down": "docker compose -f docker-compose.qdrant.yml down",

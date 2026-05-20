@@ -26,6 +26,9 @@ Eller i två terminaler: `dev:api` + `dev`.
 | `OPENROUTER_API_KEY` | Ja (Vercel/lokal) | En nyckel räcker — fyller alla zoner |
 | `OPENROUTER_KEY_*` (7 st) | Nej | Extra failover mellan konton |
 | `EXA_API_KEY` | Rekommenderas | Live webbsökning vid discovery |
+| `GDP_API_KEY_*` | Bred sökning | Utlysningar från Vinnova, Formas, Forte, VR ([gdphub.se](https://gdphub.se/)) |
+| `SWECRIS_API_KEY` | Bred sökning | Historiska projekt/finansiärer ([Swecris API](https://www.vr.se/swecris/swecris-api/)) |
+| Stiftelseregister | Bred sökning | `npm run sync:stiftelser` — [Länsstyrelsen öppen data](https://stiftelser.lansstyrelsen.se/%C3%96ppendata) |
 | `QDRANT_URL` + `QDRANT_API_KEY` | Nej | Vektorminne (ej kopplat till UI ännu) |
 | `GOOGLE_GEMINI_API_KEY` | Om Qdrant | Embeddings för Qdrant |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Prod | Inloggning |
@@ -130,6 +133,28 @@ Om `docker` hänger: **Docker Desktop** är troligen avstängd eller fast.
 | `openrouter/free` | 10–80 s | varierar | Slumpar modell (ibland VL/multimodal) |
 
 `OPENROUTER_MODEL_TIER=auto` provar i ordning: flash-lite → minimax → deepseek → openrouter/free → betalt.
+
+## Officiella register (bred sökning)
+
+Prioritering enligt Kimi/rekommendation — kombineras med Exa i **Bred**-läge:
+
+| Källa | Setup | Vad du får |
+|--------|--------|------------|
+| **[GDP](https://gdphub.se/)** | `GDP_API_KEY_VINNOVA`, `_FORMAS`, `_FORTE`, `_VR` | Aktuella utlysningar (samma standard) |
+| **[Stiftelseregister](https://stiftelser.lansstyrelsen.se/%C3%96ppendata)** | `npm run sync:stiftelser` | ~tusentals stiftelser med ändamålstext |
+| **[Swecris](https://swecris.vr.se/)** | `SWECRIS_API_KEY` | Historiska projekt → rätt finansiär |
+| **Exa** | `EXA_API_KEY` | Tillväxtverket, EU, Almi, m.fl. som saknar GDP |
+
+```bash
+# 1. GDP-nycklar: gdphub.se → Skapa API-nyckel (en per myndighet)
+# 2. Stiftelser (lokal cache, ~22 MB nedladdning):
+npm run sync:stiftelser
+
+# 3. Swecris: ansök token på vr.se/swecris/swecris-api
+curl -s http://localhost:3001/api/official-sources | jq
+```
+
+På Vercel: sätt GDP/Swecris-env; stiftelse-index bör ligga i blob/storage eller köras på persistent server (22 MB passar dåligt i serverless vid cold start).
 
 ## Browser-automation (browser-use)
 

@@ -7,6 +7,11 @@ import path from 'path';
 import PDFDocument from 'pdfkit';
 import { fileURLToPath } from 'url';
 import { MemoryService } from './services/memoryService.js';
+import {
+  collectOfficialSourceData,
+  getOfficialSourcesStatus,
+  downloadStiftelseRegister,
+} from './services/officialSources.js';
 import { getModelCandidates, MODEL_TIER } from './modelRouter.js';
 import { isQdrantConfigured } from './qdrantConfig.js';
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from './embeddings.js';
@@ -320,7 +325,7 @@ app.get('/api/health', (req, res) => {
   const activeZones = LLM_ZONES.filter(z => z.client).length;
   res.json({
     status: activeZones > 0 ? 'ok' : 'degraded',
-    apiVersion: '2-async-search',
+    apiVersion: '3-official-sources',
     timestamp: new Date().toISOString(),
     backend: usesSharedKeyOnly ? 'OpenRouter (shared key)' : 'OpenRouter (multi-zone)',
     openRouter: {
@@ -339,6 +344,7 @@ app.get('/api/health', (req, res) => {
       models: z.cascade ? getModelCandidates('pro') : z.models,
     })),
     search: EXA_API_KEY ? 'Exa (live)' : 'LLM fallback',
+    officialSources: getOfficialSourcesStatus(),
     memory: {
       qdrant: isQdrantConfigured(),
       embeddingModel: EMBEDDING_MODEL,
@@ -494,8 +500,11 @@ app.get('/api/auth/me', (req, res) => {
   }
 });
 
-/** Bredd: myndigheter + stiftelser/fonder (Exa-sökplan) */
+/** Bredd: myndigheter + stiftelser/fonder (Exa-sökplan + officiella register) */
 const GRANT_SOURCE_HINTS = [
+  'GDP API (gdphub.se): Vinnova, Formas, Forte, Vetenskapsrådet — utlysningar',
+  'Länsstyrelsens stiftelseregister (stiftelser.lansstyrelsen.se)',
+  'Swecris (swecris.vr.se) — historiska finansiärer och projekt',
   'Vinnova (vinnova.se)',
   'Tillväxtverket (tillvaxtverket.se)',
   'Region/län/kommun (regiongavleborg.se, region.se)',
@@ -565,6 +574,28 @@ async function runGrantSearchPipeline({
 
   log(`Startar sökning för ${orgName}: "${userQuery.substring(0, 60)}${userQuery.length > 60 ? '…' : ''}"`);
 
+  let officialData = { grants: [], meta: {}, markdown: '' };
+  try {
+    log('Hämtar officiella källor (GDP / stiftelser / Swecris)…');
+    officialData = await collectOfficialSourceData({
+      query: userQuery,
+      orgProfile,
+      searchMode,
+      targetCount,
+    });
+    const parts = [];
+    if (officialData.meta.gdp?.configured) parts.push(`GDP (${officialData.meta.gdp.agencies?.join(', ') || '—'})`);
+    if (officialData.meta.stiftelser?.available) parts.push(`stiftelser (${officialData.grants.filter(g => g.source === 'stiftelse-register').length})`);
+    if (officialData.meta.swecris?.available) parts.push('Swecris');
+    log(
+      parts.length
+        ? `✓ Officiella källor: ${officialData.grants.length} träffar (${parts.join(' · ')})`
+        : `Officiella källor: ${officialData.meta.gdp?.message || officialData.meta.stiftelser?.message || 'konfigurera API-nycklar / sync:stiftelser'}`
+    );
+  } catch (err) {
+    log(`⚠ Officiella källor: ${err.message}`);
+  }
+
   const sourceList = searchMode === 'broad'
     ? GRANT_SOURCE_HINTS.join('; ')
     : GRANT_SOURCE_HINTS.slice(0, 5).join('; ');
@@ -627,6 +658,9 @@ Sökämne: "${userQuery}"
 Rådata från webbsökning:
 ${JSON.stringify(exaResults, null, 1)}
 
+Officiella register (prioritera dessa om relevanta — verifierade källor):
+${officialData.markdown || '(inga officiella träffar denna gång)'}
+
 Regler:
 - Lista upp till ${targetCount} utlysningar om underlaget räcker; annars färre men ärligt.
 - Blanda källor: max 40% från samma finansiär (t.ex. inte bara Vinnova).
@@ -640,7 +674,13 @@ ${GRANT_OUTPUT_FORMAT}`;
 
   const output = await generateWithFallback(synthesisPrompt, 'pro');
   log('Syntes klar — resultat redo');
-  return { output, searchSteps, usedExa: !!EXA_API_KEY && maxExaSteps > 0 };
+  return {
+    output,
+    searchSteps,
+    usedExa: !!EXA_API_KEY && maxExaSteps > 0,
+    officialSources: officialData.meta,
+    officialCount: officialData.grants.length,
+  };
 }
 
 async function executeGrantSearchTask(taskId, reqBody, maxExaSteps, pipelineOpts = {}) {
@@ -664,7 +704,7 @@ async function executeGrantSearchTask(taskId, reqBody, maxExaSteps, pipelineOpts
       return;
     }
 
-    const { output, searchSteps, usedExa } = await runGrantSearchPipeline({
+    const { output, searchSteps, usedExa, officialSources, officialCount } = await runGrantSearchPipeline({
       query,
       orgProfile,
       filters,
@@ -679,7 +719,9 @@ async function executeGrantSearchTask(taskId, reqBody, maxExaSteps, pipelineOpts
     if (taskObj) {
       taskObj.result = output;
       taskObj.searchSteps = searchSteps;
-      taskObj.source = usedExa ? 'exa+llm' : 'llm-only';
+      taskObj.source = usedExa ? 'exa+official+llm' : 'official+llm';
+      taskObj.officialSources = officialSources;
+      taskObj.officialCount = officialCount;
       taskObj.completed = true;
       taskObj.status = 'Klar!';
     }
@@ -691,6 +733,20 @@ async function executeGrantSearchTask(taskId, reqBody, maxExaSteps, pipelineOpts
     }
   }
 }
+
+app.get('/api/official-sources', (req, res) => {
+  res.json({ success: true, ...getOfficialSourcesStatus() });
+});
+
+/** Lokal/admin: ladda ner stiftelseregister (~22 MB). Tar 1–3 min. */
+app.post('/api/admin/sync-stiftelser', async (req, res) => {
+  try {
+    const result = await downloadStiftelseRegister();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 app.post('/api/search-grants', (req, res) => {
   const { targetCount = 8, searchMode = 'standard' } = req.body;
