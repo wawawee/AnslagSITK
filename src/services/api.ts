@@ -1,4 +1,4 @@
-import type { ApplicationDraft, BrowserUseResponse, DeepSearchResponse, Grant, ProjectInfo, SearchFilters, OrgProfile } from '@/types';
+import type { ApplicationDraft, DeepSearchResponse, Grant, GrantIntelligence, ProjectInfo, SearchFilters, OrgProfile, FundingEntity, PortfolioAccount, PortfolioAccountDetail } from '@/types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
@@ -20,31 +20,17 @@ class ApiService {
     return response.json() as Promise<T>;
   }
 
-  async runBrowserTask(task: string): Promise<BrowserUseResponse> {
-    return this.fetch('/api/browser-use/run', {
-      method: 'POST',
-      body: JSON.stringify({ task }),
-    });
-  }
-
-  async createSession(config?: Record<string, unknown>): Promise<BrowserUseResponse> {
-    return this.fetch('/api/browser-use/sessions', {
-      method: 'POST',
-      body: JSON.stringify(config || {}),
-    });
-  }
-
-  async sendMessage(sessionId: string, message: string): Promise<BrowserUseResponse> {
-    return this.fetch(`/api/browser-use/sessions/${sessionId}/messages`, {
-      method: 'POST',
-      body: JSON.stringify({ message }),
-    });
-  }
-
   async deepSearch(query: string, orgProfile?: OrgProfile): Promise<DeepSearchResponse> {
     return this.fetch('/api/deep-search', {
       method: 'POST',
       body: JSON.stringify({ query, orgProfile }),
+    });
+  }
+
+  async grantIntelligence(grantInfo: Grant, orgProfile?: OrgProfile): Promise<GrantIntelligence> {
+    return this.fetch('/api/grant-intelligence', {
+      method: 'POST',
+      body: JSON.stringify({ grantInfo, orgProfile }),
     });
   }
 
@@ -64,12 +50,9 @@ class ApiService {
         body: JSON.stringify({ query, filters, orgProfile }),
       });
 
-      if (typeof result === 'object' && result !== null) {
-        const browserRes = result as BrowserUseResponse;
-        if (browserRes.output || browserRes.result) {
-          const rawOutput = browserRes.output || (typeof browserRes.result === 'string' ? browserRes.result : JSON.stringify(browserRes.result));
-          return this.parseGrantsFromOutput(rawOutput);
-        }
+      if (typeof result === 'object' && result !== null && 'output' in result) {
+        const raw = (result as { output?: string }).output;
+        if (raw) return this.parseGrantsFromOutput(raw);
       }
 
       return Array.isArray(result) ? (result as Grant[]) : this.getMockGrants();
@@ -252,6 +235,68 @@ class ApiService {
         status: 'open',
       }
     ];
+  }
+
+  // --- Entity Endpoints ---
+  async getEntities(): Promise<FundingEntity[]> {
+    const response = await this.fetch<{ entities: FundingEntity[] }>('/api/entities');
+    return response.entities || [];
+  }
+
+  async getEntity(id: string): Promise<FundingEntity | null> {
+    try {
+      const response = await this.fetch<{ entity: FundingEntity }>(`/api/entities/${id}`);
+      return response.entity || null;
+    } catch {
+      return null;
+    }
+  }
+
+  entityToOrgProfile(entity: FundingEntity): OrgProfile {
+    return {
+      name: entity.name,
+      description: entity.description,
+      focusAreas: entity.focusAreas,
+      strengths: entity.strengths,
+      partnerships: entity.partnerships,
+      region: entity.region,
+      orgType: entity.type,
+      orgNr: entity.orgNr,
+      phone: entity.phone,
+    };
+  }
+
+  // --- Portfolio Endpoints (privat verktyg — ingen auth) ---
+  async getPortfolioAccounts(): Promise<PortfolioAccount[]> {
+    const response = await this.fetch<{ accounts: PortfolioAccount[] }>('/api/portfolio/accounts');
+    return response.accounts || [];
+  }
+
+  async getPortfolioAccount(account: string): Promise<PortfolioAccountDetail | null> {
+    try {
+      return await this.fetch<PortfolioAccountDetail>(`/api/portfolio/account/${account}`);
+    } catch {
+      return null;
+    }
+  }
+
+  // --- PDF Export ---
+  async generatePdf(draft: ApplicationDraft, entity?: { name?: string; orgNr?: string; phone?: string }): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/generate-pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ draft, entity }),
+    });
+    if (!response.ok) throw new Error('PDF-generering misslyckades');
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ansokan-${draft.id || Date.now()}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 }
 

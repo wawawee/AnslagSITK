@@ -5,6 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:api": "node api/index.js",
+    "dev:all": "node api/index.js & vite",
+    "validate": "node scripts/validate-env.mjs",
+    "test:models": "node scripts/test-openrouter-models.mjs",
+    "qdrant:up": "docker compose -f docker-compose.qdrant.yml up -d",
+    "qdrant:down": "docker compose -f docker-compose.qdrant.yml down",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -53,6 +59,7 @@
     "lucide-react": "^0.562.0",
     "next-themes": "^0.4.6",
     "openai": "^6.34.0",
+    "pdfkit": "^0.18.0",
     "react": "^19.2.0",
     "react-day-picker": "^9.13.0",
     "react-dom": "^19.2.0",

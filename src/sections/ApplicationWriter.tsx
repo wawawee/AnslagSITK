@@ -60,8 +60,7 @@ export function ApplicationWriter({ selectedGrant, orgProfile: externalProfile }
   const [proposals, setProposals] = useState<ProjectInfo[]>([]);
   // Use the externally-provided profile (from App-level state) if available and filled in,
   // otherwise fall back to the hardcoded default so the writer still works standalone.
-  const resolvedDefault = externalProfile?.name ? externalProfile : defaultOrgProfile;
-  const [profile, setProfile] = useState<OrgProfile>(resolvedDefault);
+  const profile: OrgProfile = externalProfile?.name ? externalProfile : defaultOrgProfile;
 
   const generateProjectProposal = async () => {
     if (!selectedGrant) {

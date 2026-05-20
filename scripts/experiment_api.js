@@ -1,3 +1,4 @@
+/** @deprecated browser-use.com API — AnslagSITK använder Exa + OpenRouter i api/index.js */
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 import dotenv from 'dotenv';

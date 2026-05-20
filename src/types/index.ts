@@ -20,6 +20,21 @@ export interface OrgProfile {
   region: string;
   orgType?: string;
   orgNr?: string;
+  phone?: string;
+}
+
+// Funding entity from backend configuration
+export interface FundingEntity {
+  id: string;
+  name: string;
+  orgNr: string;
+  phone: string;
+  type: 'private' | 'nonprofit' | 'company' | 'holding';
+  description: string;
+  focusAreas: string[];
+  strengths: string[];
+  partnerships: string[];
+  region: string;
 }
 
 export interface ProjectInfo {
@@ -56,13 +71,6 @@ export interface SearchFilters {
   deadline?: string;
 }
 
-export interface BrowserUseResponse {
-  output?: string;
-  result?: string | Record<string, unknown>;
-  error?: string;
-  success?: boolean;
-}
-
 export interface DeepSearchStepResult {
   step: string;
   output?: string;
@@ -74,4 +82,46 @@ export interface DeepSearchResponse {
   plan: string[];
   rawResults: DeepSearchStepResult[];
   synthesis: string;
+}
+
+export interface SimilarFundedProject {
+  projectName: string;
+  organization: string;
+  year?: string;
+  amount?: string;
+  summary: string;
+  url?: string;
+}
+
+export interface GrantIntelligence {
+  success: boolean;
+  grantName: string;
+  funder: string;
+  searchQueries?: string[];
+  funderProfile: string;
+  similarProjects: SimilarFundedProject[];
+  eligibilityNotes: string;
+  applicationTips: string;
+  commonPitfalls: string;
+  fitForOrg: string;
+  rawSynthesis?: string;
+}
+
+// Portfolio / GitHub Archive types
+export interface GitHubRepo {
+  name: string;
+  readme: string | null;
+  packageJson: { name?: string; description?: string; version?: string } | null;
+}
+
+export interface PortfolioAccount {
+  account: string;
+  repoCount: number;
+  repos: { name: string; path: string }[];
+}
+
+export interface PortfolioAccountDetail {
+  account: string;
+  repoCount: number;
+  repos: GitHubRepo[];
 }

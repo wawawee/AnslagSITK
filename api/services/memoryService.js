@@ -1,8 +1,9 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { embedText, EMBEDDING_DIMENSIONS } from '../embeddings.js';
+import { getQdrantApiKey, getQdrantUrl } from '../qdrantConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -10,43 +11,40 @@ const ROOT_DIR = path.join(__dirname, '..', '..');
 const AGENT_DIR = path.join(ROOT_DIR, '.agent');
 const MEMORY_DIR = path.join(AGENT_DIR, 'memory');
 
-// Initialize Qdrant if credentials are provided
 let qdrantClient = null;
-if (process.env.QDRANT_URL && process.env.QDRANT_API_KEY) {
+const qdrantUrl = getQdrantUrl();
+const qdrantKey = getQdrantApiKey();
+if (qdrantUrl && qdrantKey) {
   try {
-    qdrantClient = new QdrantClient({
-      url: process.env.QDRANT_URL,
-      apiKey: process.env.QDRANT_API_KEY,
-    });
-    console.log('Qdrant Cloud client initialized.');
+    qdrantClient = new QdrantClient({ url: qdrantUrl, apiKey: qdrantKey });
+    console.log('Qdrant client initialized.');
   } catch (err) {
     console.error('Failed to initialize Qdrant client:', err);
   }
 }
 
-// Initialize Gemini for embeddings
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || '');
-const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+async function ensureCollection(collectionName) {
+  const collections = await qdrantClient.getCollections();
+  const exists = collections.collections.find((c) => c.name === collectionName);
+  if (!exists) {
+    await qdrantClient.createCollection(collectionName, {
+      vectors: { size: EMBEDDING_DIMENSIONS, distance: 'Cosine' },
+    });
+  }
+}
 
 export class MemoryService {
-  /**
-   * Reads a core memory file (AGENTS.md, MEMORY.md, WORKING.md)
-   */
   static async readFile(filename) {
     try {
       const filePath = path.join(AGENT_DIR, filename);
       return await fs.readFile(filePath, 'utf-8');
-    } catch (err) {
+    } catch {
       console.warn(`Memory file ${filename} not found or unreadable.`);
       return null;
     }
   }
 
-  /**
-   * Updates a core memory file
-   */
   static async writeFile(filename, content) {
-    // If it's MEMORY.md, we might want to sync with Qdrant
     if (filename === 'MEMORY.md' && qdrantClient) {
       this.syncToQdrant('memory-curated', content);
     }
@@ -60,13 +58,9 @@ export class MemoryService {
     await fs.writeFile(filePath, content, 'utf-8');
   }
 
-  /**
-   * Appends to the daily episodic log
-   */
   static async logEpisodic(message, metadata = {}) {
     const today = new Date().toISOString().split('T')[0];
 
-    // Sync to Qdrant if available
     if (qdrantClient) {
       this.syncToQdrant('memory-episodic', message, { ...metadata, date: today });
     }
@@ -82,69 +76,53 @@ export class MemoryService {
 
     try {
       await fs.appendFile(logFile, logEntry, 'utf-8');
-    } catch (err) {
-      // Create file if it doesn't exist
+    } catch {
       const header = `---\ndate: ${today}\ntype: episodic-log\n---\n# Episodic Log - ${today}\n`;
       await fs.writeFile(logFile, header + logEntry, 'utf-8');
     }
   }
 
-  /**
-   * Syncs content to Qdrant vector database
-   */
   static async syncToQdrant(collectionName, text, metadata = {}) {
     if (!qdrantClient) return;
 
     try {
-      // Create collection if it doesn't exist (simplified)
-      const collections = await qdrantClient.getCollections();
-      if (!collections.collections.find(c => c.name === collectionName)) {
-        await qdrantClient.createCollection(collectionName, {
-          vectors: { size: 768, distance: 'Cosine' }
-        });
-      }
-
-      // Generate embedding
-      const embedResult = await embedModel.embedContent(text);
-      const vector = embedResult.embedding.values;
+      await ensureCollection(collectionName);
+      const vector = await embedText(text);
 
       await qdrantClient.upsert(collectionName, {
         wait: true,
         points: [
           {
-            id: Date.now(), // Simplified ID
-            vector: vector,
+            id: Date.now(),
+            vector,
             payload: {
               text,
               ...metadata,
-              synced_at: new Date().toISOString()
-            }
-          }
-        ]
+              synced_at: new Date().toISOString(),
+            },
+          },
+        ],
       });
-      console.log(`Synced content to Qdrant collection: ${collectionName}`);
+      console.log(`Synced to Qdrant: ${collectionName}`);
     } catch (err) {
       console.error('Qdrant sync failed:', err);
     }
   }
 
-  /**
-   * Searches memory using semantic search
-   */
   static async searchMemory(query, collectionName = 'memory-episodic') {
     if (!qdrantClient) return [];
 
     try {
-      const embedResult = await embedModel.embedContent(query);
-      const vector = embedResult.embedding.values;
+      await ensureCollection(collectionName);
+      const vector = await embedText(query);
 
       const searchResult = await qdrantClient.search(collectionName, {
-        vector: vector,
+        vector,
         limit: 5,
-        with_payload: true
+        with_payload: true,
       });
 
-      return searchResult.map(res => res.payload);
+      return searchResult.map((res) => res.payload);
     } catch (err) {
       console.error('Qdrant search failed:', err);
       return [];

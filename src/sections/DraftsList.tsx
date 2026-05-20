@@ -4,9 +4,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { ApplicationDraft } from '@/types';
-import { Calendar, Download, Edit, Euro, FileText, Trash2 } from 'lucide-react';
+import { Calendar, Download, Edit, Euro, FileText, FileType, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { apiService } from '@/services/api';
 
 interface DraftsListProps {
   onResumeDraft?: (draft: ApplicationDraft) => void;
@@ -24,6 +25,17 @@ export function DraftsList({ onResumeDraft }: DraftsListProps = {}) {
     localStorage.setItem('sitk-drafts', JSON.stringify(updated));
     setDrafts(updated);
     toast.success('Utkast raderat');
+  };
+
+  const downloadPdf = async (draft: ApplicationDraft) => {
+    toast.info('Genererar PDF...');
+    try {
+      await apiService.generatePdf(draft);
+      toast.success('PDF nedladdad!');
+    } catch (err) {
+      console.error('PDF error:', err);
+      toast.error('Kunde inte generera PDF. Prova Markdown istället.');
+    }
   };
 
   const downloadDraft = (draft: ApplicationDraft) => {
@@ -95,7 +107,17 @@ ${draft.content.dissemination}
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8"
+                    onClick={() => downloadPdf(draft)}
+                    title="Ladda ner som PDF"
+                  >
+                    <FileType className="h-4 w-4 text-blue-500" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
                     onClick={() => downloadDraft(draft)}
+                    title="Ladda ner som Markdown"
                   >
                     <Download className="h-4 w-4" />
                   </Button>
@@ -234,6 +256,14 @@ ${draft.content.dissemination}
               </ScrollArea>
 
               <div className="flex gap-3 pt-4">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => downloadPdf(selectedDraft)}
+                  title="Ladda ner som PDF"
+                >
+                  <FileType className="h-4 w-4 text-blue-500" />
+                </Button>
                 <Button
                   className="flex-1 bg-blue-600 hover:bg-blue-700"
                   onClick={() => downloadDraft(selectedDraft)}

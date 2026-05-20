@@ -16,15 +16,6 @@ import { Building2, ChevronDown, ChevronUp, User, Users, Pencil, CheckCircle2 } 
 
 const STORAGE_KEY = 'sitk-org-profile';
 
-const defaultProfile: OrgProfile = {
-  name: '',
-  description: '',
-  focusAreas: [],
-  strengths: [],
-  partnerships: [],
-  region: '',
-};
-
 export function loadStoredProfile(): OrgProfile | null {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);

@@ -2,9 +2,14 @@ import OpenAI from 'openai';
 import cors from 'cors';
 import 'dotenv/config';
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
+import PDFDocument from 'pdfkit';
 import { fileURLToPath } from 'url';
 import { MemoryService } from './services/memoryService.js';
+import { getModelCandidates, MODEL_TIER } from './modelRouter.js';
+import { isQdrantConfigured } from './qdrantConfig.js';
+import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from './embeddings.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,44 +20,172 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// --- Azure AI Foundry Multi-Zone Setup ---
-const mkClient = (endpoint, key) => new OpenAI({
-  baseURL: endpoint,
-  apiKey: key,
-  defaultHeaders: { 'api-key': key },
-});
-
-const azureSweden = mkClient(process.env.AZURE_SWEDEN_OPENAI_ENDPOINT,  process.env.AZURE_SWEDEN_API_KEY);
-const azureUSA    = mkClient(process.env.AZURE_USA_OPENAI_ENDPOINT,     process.env.AZURE_USA_API_KEY);
-const azureWestUS = mkClient(process.env.AZURE_WESTUS_OPENAI_ENDPOINT,  process.env.AZURE_WESTUS_API_KEY);
-const azureNorway = mkClient(process.env.AZURE_NORWAY_OPENAI_ENDPOINT,  process.env.AZURE_NORWAY_API_KEY);
-
-// Zone map — each zone knows exactly which deployment name to use per task mode:
-//   reason = planning / analytical tasks  (gpt-5.3 reasoning series)
-//   pro    = synthesis / proposal writing (gpt-5.4 capable series)
-//   fast   = light/quick tasks            (nano / mini)
-const ZONE_MAP = [
+// --- Funding Entities ---
+// PII (personnummer, telefon) hämtas från miljövariabler av säkerhetsskäl
+const FUNDING_ENTITIES = [
   {
-    name: 'Sweden Central', client: azureSweden,
-    models: { reason: 'gpt-5.3-codex', pro: 'gpt-5.4-1',    fast: 'o4-mini' },
+    id: 'per-brinell',
+    name: 'Per Brinell',
+    orgNr: process.env.ENTITY_PER_ORGNR || '',
+    phone: process.env.ENTITY_PER_PHONE || '',
+    type: 'private',
+    description: 'Privatperson — innovatör och utvecklare inom AI, systemarkitektur och digital transformation.',
+    focusAreas: ['AI-utveckling', 'Systemarkitektur', 'Open Source', 'Digital innovation'],
+    strengths: ['Full-stack utveckling', 'AI/ML', 'DevOps', 'Projektledning'],
+    partnerships: [],
+    region: 'Gävleborg',
   },
   {
-    name: 'East US 2',      client: azureUSA,
-    models: { reason: 'o4-mini',        pro: 'gpt-5.4',      fast: 'o4-mini' },
+    id: 'sitk',
+    name: 'Sandvikens IT-Kår',
+    orgNr: process.env.ENTITY_SITK_ORGNR || '',
+    phone: process.env.ENTITY_SITK_PHONE || '',
+    type: 'nonprofit',
+    description: 'Digital katalysator för Sandviken — främjar AI, digital hållbarhet och regional utveckling genom utbildning, innovation och samverkan.',
+    focusAreas: ['AI', 'Digital hållbarhet', 'Regional utveckling', 'Utbildning', 'Innovation'],
+    strengths: ['Gemenskap', 'Utbildning', 'AI-kompetens', 'Regional förankring'],
+    partnerships: ['Göranssonska stiftelserna', 'Region Gävleborg', 'Sandvikens kommun'],
+    region: 'Gävleborg',
   },
   {
-    name: 'Norway East',    client: azureNorway,
-    models: { reason: 'gpt-5.3-chat',   pro: 'gpt-5.4',      fast: 'gpt-5.4-nano' },
+    id: 'klattertrader',
+    name: 'Klätterträder AB',
+    orgNr: process.env.ENTITY_KLATTERTRADER_ORGNR || '',
+    phone: process.env.ENTITY_KLATTERTRADER_PHONE || '',
+    type: 'company',
+    description: 'Teknikkonsult och produktutveckling inom klätterutrustning, äventyrsprodukter och innovativa materiallösningar.',
+    focusAreas: ['Produktutveckling', 'Materialinnovation', 'Hållbarhet', 'Äventyrssport'],
+    strengths: ['Innovation', 'Produktdesign', 'Materialkunskap', 'Hållbarhetstänk'],
+    partnerships: [],
+    region: 'Gävleborg',
   },
   {
-    name: 'West US 3',      client: azureWestUS,
-    models: { reason: 'gpt-5.2-chat',   pro: 'gpt-5.2-chat', fast: 'gpt-4o' },
+    id: 'horizonten',
+    name: 'Horizonten Holding',
+    orgNr: process.env.ENTITY_HORIZONTEN_ORGNR || '',
+    phone: process.env.ENTITY_HORIZONTEN_PHONE || '',
+    type: 'holding',
+    description: 'Holdingbolag för teknikinvesteringar — fokuserar på AI-drivna startups, digital infrastruktur och långsiktiga teknikplaceringar.',
+    focusAreas: ['AI-investeringar', 'Tech-startups', 'Digital infrastruktur', 'Framtidsteknik'],
+    strengths: ['Investeringsstrategi', 'Tech-due diligence', 'Portföljförvaltning', 'AI-expertis'],
+    partnerships: [],
+    region: 'Gävleborg',
   },
 ];
 
-async function azureChat(client, model, prompt, zone = 'unknown') {
-  // o-series models use max_completion_tokens and don't support temperature
-  const isOSeries = /^o\d/i.test(model);
+// --- OpenRouter Multi-Key Multi-Model Setup ---
+// OPENROUTER_API_KEY (t.ex. Vercel) används som fallback för alla zoner
+const orKey = (...envNames) => {
+  for (const name of envNames) {
+    const v = process.env[name]?.trim();
+    if (v) return v;
+  }
+  return process.env.OPENROUTER_API_KEY?.trim() || '';
+};
+
+const mkOpenRouterClient = (key) => {
+  if (!key) return null; // hoppa över zonen om nyckel saknas
+  return new OpenAI({
+    baseURL: 'https://openrouter.ai/api/v1',
+    apiKey: key,
+    defaultHeaders: {
+      'HTTP-Referer': 'https://sitk.se',
+      'X-OpenRouter-Title': 'AnslagSITK',
+    },
+  });
+};
+
+// 7 zoner — 6 konton + 1 backup-nyckel
+// Varje zon = egen API-nyckel + egna modellpreferenser
+// OpenRouter hanterar automatisk provider-failover VID SIDAN AV vår key-rotation
+const ZONE_MAP = [
+  {
+    name: 'Zon 1 (pellegrosso — Claude)',
+    client: mkOpenRouterClient(orKey('OPENROUTER_KEY_PELLEGROSSO')),
+    models: {
+      reason: 'anthropic/claude-3.5-sonnet',
+      pro:    'anthropic/claude-3.5-sonnet',
+      fast:   'google/gemini-2.5-flash',
+    },
+  },
+  {
+    name: 'Zon 2 (cymwave — OpenAI)',
+    client: mkOpenRouterClient(orKey('OPENROUTER_KEY_CYMWAVE')),
+    models: {
+      reason: 'openai/o3-mini',
+      pro:    'openai/gpt-4o',
+      fast:   'openai/gpt-4o-mini',
+    },
+  },
+  {
+    name: 'Zon 3 (carl — Gemini)',
+    client: mkOpenRouterClient(orKey('OPENROUTER_KEY_CARL')),
+    models: {
+      reason: 'google/gemini-2.5-pro',
+      pro:    'google/gemini-2.5-pro',
+      fast:   'google/gemini-2.5-flash',
+    },
+  },
+  {
+    name: 'Zon 4 (hlivfa — Llama)',
+    client: mkOpenRouterClient(orKey('OPENROUTER_KEY_HLIVFA')),
+    models: {
+      reason: 'meta-llama/llama-3.1-70b-instruct',
+      pro:    'meta-llama/llama-3.1-405b-instruct',
+      fast:   'meta-llama/llama-3.1-8b-instruct',
+    },
+  },
+  {
+    name: 'Zon 5 (perbrinell — Claude)',
+    client: mkOpenRouterClient(orKey('OPENROUTER_KEY_PERBRINELL')),
+    models: {
+      reason: 'anthropic/claude-3.5-sonnet',
+      pro:    'anthropic/claude-3.5-sonnet',
+      fast:   'openai/gpt-4o-mini',
+    },
+  },
+  {
+    name: 'Zon 6 (leadagenticos — OpenAI)',
+    client: mkOpenRouterClient(orKey('OPENROUTER_KEY_LEADAGENTICOS')),
+    models: {
+      reason: 'openai/gpt-4o',
+      pro:    'openai/gpt-4o',
+      fast:   'openai/gpt-4o-mini',
+    },
+  },
+  {
+    name: 'Zon 7 (perbrinell MAP — backup)',
+    client: mkOpenRouterClient(orKey('OPENROUTER_KEY_PERBRINELL_MAP')),
+    models: {
+      reason: 'google/gemini-2.5-flash',
+      pro:    'google/gemini-2.5-flash',
+      fast:   'google/gemini-2.5-flash',
+    },
+  },
+];
+
+const DEDICATED_OR_KEYS = [
+  'OPENROUTER_KEY_PELLEGROSSO', 'OPENROUTER_KEY_CYMWAVE', 'OPENROUTER_KEY_CARL',
+  'OPENROUTER_KEY_HLIVFA', 'OPENROUTER_KEY_PERBRINELL', 'OPENROUTER_KEY_LEADAGENTICOS',
+  'OPENROUTER_KEY_PERBRINELL_MAP',
+];
+
+// En delad nyckel → en zon med modeller som fungerar på OpenRouter (undvik 404)
+const usesSharedKeyOnly =
+  !!process.env.OPENROUTER_API_KEY?.trim() &&
+  !DEDICATED_OR_KEYS.some((k) => process.env[k]?.trim());
+
+const LLM_ZONES = usesSharedKeyOnly
+  ? [{
+      name: 'OpenRouter (OPENROUTER_API_KEY)',
+      client: mkOpenRouterClient(process.env.OPENROUTER_API_KEY),
+      cascade: true,
+    }]
+  : ZONE_MAP.map((z) => ({ ...z, cascade: false }));
+
+async function openRouterChat(client, model, prompt, zoneName = 'unknown') {
+  // o-series modeller använder max_completion_tokens och stödjer inte temperature
+  const isOSeries = /^o\d|^openai\/o\d/i.test(model);
   const params = {
     model,
     messages: [{ role: 'user', content: prompt }],
@@ -65,21 +198,30 @@ async function azureChat(client, model, prompt, zone = 'unknown') {
 
 // mode: 'pro' (synthesis/proposals) | 'reason' (planning/analysis) | 'fast' (quick tasks)
 async function generateWithFallback(prompt, mode = 'pro') {
-  // backwards-compat: boolean true → 'pro', false → 'reason'
-  if (mode === true)  mode = 'pro';
+  if (mode === true) mode = 'pro';
   if (mode === false) mode = 'reason';
 
-  for (const zone of ZONE_MAP) {
-    const model = zone.models[mode] || zone.models.pro;
-    try {
-      const result = await azureChat(zone.client, model, prompt, zone.name);
-      console.log(`✅ Azure ${zone.name} [${mode}]: ${model}`);
-      return result;
-    } catch (err) {
-      console.warn(`⚠ Azure ${zone.name} misslyckades: ${err.message} — provar nästa zon...`);
+  for (const zone of LLM_ZONES) {
+    if (!zone.client) {
+      console.warn(`⚠ OpenRouter ${zone.name} hoppas över — ingen API-nyckel`);
+      continue;
+    }
+
+    const models = zone.cascade
+      ? getModelCandidates(mode)
+      : [zone.models[mode] || zone.models.pro];
+
+    for (const model of models) {
+      try {
+        const result = await openRouterChat(zone.client, model, prompt, zone.name);
+        console.log(`✅ OpenRouter ${zone.name} [${mode}/${MODEL_TIER}]: ${model}`);
+        return result;
+      } catch (err) {
+        console.warn(`⚠ ${zone.name} / ${model}: ${err.message}`);
+      }
     }
   }
-  throw new Error('Alla Azure-zoner misslyckades');
+  throw new Error(`Alla modeller misslyckades (tier=${MODEL_TIER})`);
 }
 
 // --- Exa Web Search (ersätter Google Grounding) ---
@@ -116,7 +258,7 @@ async function runExaSearch(query, taskId = null) {
     return { output };
   } catch (err) {
     console.error('Exa search failed:', err.message);
-    // Fallback: låt Azure generera svar utan live-data
+    // Fallback: låt OpenRouter generera svar utan live-data
     const fallbackPrompt = `Du är en researcher om svenska anslag. Svara på frågan baserat på din kunskap om: ${query}. Fokusera på utlysningar 2025-2026. Ge konkreta finansiärer, belopp och URLer.`;
     const text = await generateWithFallback(fallbackPrompt, 'pro');
     return { output: text };
@@ -137,19 +279,174 @@ function updateTaskStatus(taskId, message) {
 
 // --- Routes ---
 
+const OPENROUTER_KEY_ENV_NAMES = [
+  'OPENROUTER_API_KEY',
+  'OPENROUTER_KEY_PELLEGROSSO', 'OPENROUTER_KEY_CYMWAVE', 'OPENROUTER_KEY_CARL',
+  'OPENROUTER_KEY_HLIVFA', 'OPENROUTER_KEY_PERBRINELL', 'OPENROUTER_KEY_LEADAGENTICOS',
+  'OPENROUTER_KEY_PERBRINELL_MAP',
+];
+
+const ALLOWED_MEMORY_FILES = new Set(['AGENTS.md', 'MEMORY.md', 'WORKING.md']);
+const AGENT_DIR = path.join(__dirname, '..', '.agent');
+const MEMORY_DIR = path.join(AGENT_DIR, 'memory');
+
 app.get('/api/health', (req, res) => {
+  const activeZones = LLM_ZONES.filter(z => z.client).length;
   res.json({
-    status: 'ok',
+    status: activeZones > 0 ? 'ok' : 'degraded',
     timestamp: new Date().toISOString(),
-    backend: 'Azure AI Foundry',
-    zones: ZONE_MAP.map(z => ({ name: z.name, models: z.models })),
-    search: EXA_API_KEY ? 'Exa (live)' : 'Azure fallback',
+    backend: usesSharedKeyOnly ? 'OpenRouter (shared key)' : 'OpenRouter (multi-zone)',
+    openRouter: {
+      zonesActive: activeZones,
+      zonesTotal: LLM_ZONES.length,
+      keysConfigured: OPENROUTER_KEY_ENV_NAMES.filter(k => process.env[k]?.trim()).length,
+      sharedKey: !!process.env.OPENROUTER_API_KEY?.trim(),
+      mode: usesSharedKeyOnly ? 'shared' : 'multi',
+      modelTier: MODEL_TIER,
+      modelCascade: getModelCandidates('pro').slice(0, 6),
+    },
+    zones: LLM_ZONES.map(z => ({
+      name: z.name,
+      active: !!z.client,
+      cascade: !!z.cascade,
+      models: z.cascade ? getModelCandidates('pro') : z.models,
+    })),
+    search: EXA_API_KEY ? 'Exa (live)' : 'LLM fallback',
+    memory: {
+      qdrant: isQdrantConfigured(),
+      embeddingModel: EMBEDDING_MODEL,
+      vectorSize: EMBEDDING_DIMENSIONS,
+      apiRoutes: true,
+    },
+    entities: FUNDING_ENTITIES.length,
+    hint: activeZones === 0 ? 'Sätt OPENROUTER_API_KEY i .env eller Vercel. Kör: npm run validate' : undefined,
   });
 });
 
+// --- Agent memory (.agent/ + valfri Qdrant) ---
+app.get('/api/memory/logs', async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const logPath = path.join(MEMORY_DIR, `${today}.md`);
+    const content = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf-8') : '';
+    res.json({ content });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/memory/:filename', async (req, res) => {
+  const { filename } = req.params;
+  if (!ALLOWED_MEMORY_FILES.has(filename)) {
+    return res.status(400).json({ error: 'Ogiltig fil' });
+  }
+  const content = await MemoryService.readFile(filename);
+  res.json({ content: content ?? '' });
+});
+
+app.post('/api/memory/:filename', async (req, res) => {
+  const { filename } = req.params;
+  if (!ALLOWED_MEMORY_FILES.has(filename)) {
+    return res.status(400).json({ error: 'Ogiltig fil' });
+  }
+  await MemoryService.writeFile(filename, req.body?.content ?? '');
+  res.json({ success: true });
+});
+
+app.post('/api/memory/search', async (req, res) => {
+  try {
+    const { query } = req.body;
+    if (!query?.trim()) return res.json({ results: [] });
+    const results = await MemoryService.searchMemory(query.trim());
+    res.json({ results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Entity Endpoints ---
+app.get('/api/entities', (req, res) => {
+  res.json({ entities: FUNDING_ENTITIES });
+});
+
+app.get('/api/entities/:id', (req, res) => {
+  const entity = FUNDING_ENTITIES.find(e => e.id === req.params.id);
+  if (!entity) return res.status(404).json({ error: 'Entitet hittades inte' });
+  res.json({ entity });
+});
+
+// --- Portfolio Integration (privat verktyg — ingen auth) ---
+
+const ARCHIVE_PATH = process.env.GITHUB_ARCHIVE_PATH || path.join(process.env.HOME || '/tmp', 'Projects/github-archive');
+
+// Enkel validering av kontonamn
+function safeAccount(name) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) return null;
+  return name;
+}
+
+app.get('/api/portfolio/accounts', (req, res) => {
+  try {
+    if (!fs.existsSync(ARCHIVE_PATH)) {
+      return res.json({ accounts: [] });
+    }
+    const accounts = fs.readdirSync(ARCHIVE_PATH, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => {
+        const accountPath = path.join(ARCHIVE_PATH, d.name);
+        const repos = fs.readdirSync(accountPath, { withFileTypes: true })
+          .filter(r => r.isDirectory())
+          .map(r => ({
+            name: r.name,
+            path: path.join(accountPath, r.name),
+          }));
+        return { account: d.name, repoCount: repos.length, repos };
+      });
+    res.json({ accounts });
+  } catch (err) {
+    console.error('Portfolio accounts error:', err.message);
+    res.status(500).json({ error: 'Kunde inte läsa portföljen' });
+  }
+});
+
+app.get('/api/portfolio/account/:account', (req, res) => {
+  try {
+    const name = safeAccount(req.params.account);
+    if (!name) return res.status(400).json({ error: 'Ogiltigt kontonamn' });
+    const accountPath = path.join(ARCHIVE_PATH, name);
+    if (!fs.existsSync(accountPath)) {
+      return res.status(404).json({ error: 'Konto hittades inte' });
+    }
+    const repos = fs.readdirSync(accountPath, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => {
+        const repoPath = path.join(accountPath, d.name);
+        let readme = '';
+        const readmePath = path.join(repoPath, 'README.md');
+        if (fs.existsSync(readmePath)) {
+          readme = fs.readFileSync(readmePath, 'utf-8').substring(0, 500);
+        }
+        let pkg = null;
+        const pkgPath = path.join(repoPath, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+          try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')); } catch {}
+        }
+        return {
+          name: d.name,
+          readme: readme || null,
+          packageJson: pkg ? { name: pkg.name, description: pkg.description, version: pkg.version } : null,
+        };
+      });
+    res.json({ account: name, repoCount: repos.length, repos });
+  } catch (err) {
+    console.error('Portfolio account error:', err.message);
+    res.status(500).json({ error: 'Kunde inte läsa kontot' });
+  }
+});
+
 app.post('/api/auth/login', (req, res) => {
-  const ADMIN_USERNAME = 'sitk_admin';
-  const ADMIN_PASSWORD = 'Sandviken2024!';
+  const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'sitk_admin';
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'pell0pell0';
   const { username, password } = req.body;
   if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
     res.json({ success: true, token: 'sitk-auth-token-v1', user: { name: 'Admin', role: 'admin' } });
@@ -214,7 +511,7 @@ app.post('/api/discover-grants', async (req, res) => {
 Skapa 3 distinkta sökfraser för att hitta utlysningar eller riskkapital.
 Returnera ENDAST en JSON-array med 3 korta söksträngar (plain text, INTE objekt).
 Exempel: ["Vinnova utlysningar AI 2026", "Riskkapital seed AI startups Sverige", "Tillväxtverket digitaliseringsstöd SMF 2026"]
-Svar:`;
+Svar ENDAST JSON-arrayen:`;
 
       const planText = await generateWithFallback(planPrompt, 'reason');
       let searchSteps = [];
@@ -337,6 +634,103 @@ Formatera som ## [Namn] lista med tydliga leads. Skriv på svenska. Inkludera de
   }
 });
 
+// Djupanalys av en utlysning: liknande beviljade projekt, krav, tips
+app.post('/api/grant-intelligence', async (req, res) => {
+  try {
+    const { grantInfo, orgProfile } = req.body;
+    if (!grantInfo?.name) {
+      return res.status(400).json({ error: 'grantInfo.name krävs' });
+    }
+
+    const funder = grantInfo.funder || 'finansiär';
+    const orgName = orgProfile?.name || 'sökande organisation';
+    const orgDesc = orgProfile?.description || '';
+
+    const searchQueries = [
+      `${funder} beviljade projekt lista exempel Sverige`,
+      `${grantInfo.name} tidigare beviljade mottagare projekt`,
+      `${funder} utlysning krav villkor ansökan ${grantInfo.name}`,
+    ];
+
+    const exaResults = [];
+    for (const q of searchQueries) {
+      try {
+        const r = await runExaSearch(q);
+        exaResults.push({ query: q, output: (r.output || '').substring(0, 2800) });
+      } catch (err) {
+        exaResults.push({ query: q, output: '', error: err.message });
+      }
+    }
+
+    const synthesisPrompt = `Du är expert på svenska anslag och hjälper "${orgName}" (${orgDesc}) att förstå en utlysning.
+
+UTLYSNING:
+${JSON.stringify(grantInfo, null, 2)}
+
+WEBBSÖKNING (rådata):
+${JSON.stringify(exaResults, null, 1)}
+
+Analysera och returnera ENDAST giltig JSON (inga markdown-kodblock) med denna struktur:
+{
+  "funderProfile": "2-4 meningar om finansiärens fokus och hur de brukar fördela medel",
+  "similarProjects": [
+    {
+      "projectName": "string",
+      "organization": "string",
+      "year": "YYYY eller okänt",
+      "amount": "belopp eller okänt",
+      "summary": "1-2 meningar vad projektet gjorde",
+      "url": "https://... eller tom sträng"
+    }
+  ],
+  "eligibilityNotes": "Viktiga krav och vem som kan söka (punktlista som en sträng med \\n)",
+  "applicationTips": "Konkreta tips för en stark ansökan till just denna utlysning",
+  "commonPitfalls": "Vanliga misstag eller avslagsorsaker",
+  "fitForOrg": "Hur väl ${orgName} matchar — ärlig bedömning med motivering"
+}
+
+Regler:
+- similarProjects: 3-6 exempel om möjligt; hitta från sökdata. Om osäkert, markera tydligt i summary.
+- Skriv på svenska.
+- Bara verkliga URL:er från sökresultaten.`;
+
+    const raw = await generateWithFallback(synthesisPrompt, 'pro');
+    let parsed;
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
+    } catch {
+      parsed = {
+        funderProfile: raw,
+        similarProjects: [],
+        eligibilityNotes: '',
+        applicationTips: '',
+        commonPitfalls: '',
+        fitForOrg: '',
+        rawSynthesis: raw,
+      };
+    }
+
+    if (isQdrantConfigured()) {
+      MemoryService.syncToQdrant(
+        'memory-grants',
+        `Utlysning: ${grantInfo.name} (${funder}). ${parsed.fitForOrg || ''}`,
+        { grantId: grantInfo.id, funder, type: 'grant-intelligence' }
+      ).catch(() => {});
+    }
+
+    res.json({
+      success: true,
+      grantName: grantInfo.name,
+      funder,
+      searchQueries,
+      ...parsed,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/generate-proposals', async (req, res) => {
   try {
     const { grantInfo, orgProfile, count = 3 } = req.body;
@@ -391,6 +785,72 @@ Returnera ett JSON-objekt med dessa fält EXAKT (för React-klienten):
   }
 });
 
+// --- PDF-generering ---
+app.post('/api/generate-pdf', async (req, res) => {
+  try {
+    const { draft, entity } = req.body;
+    if (!draft?.content) return res.status(400).json({ error: 'Saknar ansökningsdata' });
+
+    const doc = new PDFDocument({
+      size: 'A4',
+      margins: { top: 50, bottom: 50, left: 60, right: 60 },
+      info: {
+        Title: `Ansökan - ${draft.projectInfo?.title || 'Projektansökan'}`,
+        Author: entity?.name || 'AnslagSITK',
+      },
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="ansokan-${draft.id || Date.now()}.pdf"`);
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(11).font('Helvetica').fillColor('#444')
+       .text(entity?.name || 'Sökande organisation', { align: 'right' });
+    if (entity?.orgNr) doc.fontSize(9).text(`Org.nr: ${entity.orgNr}`, { align: 'right' });
+    if (entity?.phone) doc.fontSize(9).text(`Tel: ${entity.phone}`, { align: 'right' });
+    doc.moveDown(1);
+
+    // Title
+    doc.fontSize(18).font('Helvetica-Bold').fillColor('#1a1a1a')
+       .text(draft.projectInfo?.title || 'Projektansökan', { align: 'center' });
+    doc.moveDown(1);
+
+    // Horizontal line
+    doc.moveTo(60, doc.y).lineTo(535, doc.y).stroke('#ccc');
+    doc.moveDown(1);
+
+    const sections = [
+      { title: 'Sammanfattning', content: draft.content.summary },
+      { title: 'Projektbeskrivning', content: draft.content.projectDescription },
+      { title: 'Mål och förväntade resultat', content: draft.content.goals },
+      { title: 'Genomförandeplan', content: draft.content.implementation },
+      { title: 'Budget', content: draft.content.budget },
+      { title: 'Organisationens kompetens', content: draft.content.competence },
+      { title: 'Nyttjanderätt och spridning', content: draft.content.dissemination },
+    ];
+
+    for (const section of sections) {
+      if (!section.content) continue;
+      doc.fontSize(13).font('Helvetica-Bold').fillColor('#1a1a1a').text(section.title);
+      doc.moveDown(0.3);
+      doc.fontSize(10).font('Helvetica').fillColor('#333').text(section.content, { lineGap: 2 });
+      doc.moveDown(1);
+    }
+
+    doc.moveDown(1);
+    doc.moveTo(60, doc.y).lineTo(535, doc.y).stroke('#ccc');
+    doc.moveDown(0.5);
+    doc.fontSize(8).font('Helvetica').fillColor('#999')
+       .text(`Genererad av AnslagSITK • ${new Date().toLocaleDateString('sv-SE')}`, { align: 'center' });
+
+    doc.end();
+  } catch (error) {
+    console.error('PDF error:', error.message);
+    res.status(500).json({ error: 'Kunde inte generera PDF' });
+  }
+});
+
 // Serve frontend in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '..', 'dist')));
@@ -400,9 +860,13 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const server = app.listen(PORT, () => {
+  const activeZones = LLM_ZONES.filter(z => z.client).length;
   console.log(`✅ AnslagSITK backend på port ${PORT}`);
-  console.log(`🔵 Azure AI Foundry: Sweden Central (primary) → East US 2 → West US 3`);
-  console.log(`🔍 Search: ${EXA_API_KEY ? 'Exa live search' : 'Azure fallback (no Exa key)'}`);
+  console.log(`🔵 OpenRouter: ${activeZones}/${LLM_ZONES.length} zoner (${usesSharedKeyOnly ? 'delad nyckel' : 'multi-key'})`);
+  if (activeZones === 0) console.warn('⚠ VARNING: Ingen OpenRouter API-nyckel konfigurerad!');
+  console.log(`🏢 Entiteter: ${FUNDING_ENTITIES.map(e => e.name).join(', ')}`);
+  console.log(`📂 GitHub Archive: ${ARCHIVE_PATH} (${fs.existsSync(ARCHIVE_PATH) ? 'hittad' : 'saknas'})`);
+  console.log(`🔍 Search: ${EXA_API_KEY ? 'Exa live search' : 'LLM fallback (no Exa key)'}`);
 });
 
 export default app;

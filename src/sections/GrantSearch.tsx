@@ -7,8 +7,8 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { apiService } from '@/services/api';
-import type { Grant, OrgProfile, SearchFilters } from '@/types';
-import { AlertCircle, Building2, Calendar, CheckCircle2, Clock, Euro, ExternalLink, Filter, Search } from 'lucide-react';
+import type { Grant, GrantIntelligence, OrgProfile, SearchFilters } from '@/types';
+import { AlertCircle, Building2, Calendar, CheckCircle2, Clock, Euro, ExternalLink, Filter, Layers, Loader2, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -48,6 +48,8 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
   const [selectedGrant, setSelectedGrant] = useState<Grant | null>(null);
   const [deepSearchSynthesis, setDeepSearchSynthesis] = useState<string | null>(null);
   const [researchSteps, setResearchSteps] = useState<string[]>([]);
+  const [intelligence, setIntelligence] = useState<GrantIntelligence | null>(null);
+  const [intelligenceLoading, setIntelligenceLoading] = useState(false);
 
   // Load grants on mount (useEffect, not useState — fixes re-render side-effect bug)
   useEffect(() => {
@@ -78,6 +80,23 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
       toast.error('Kunde inte söka utlysningar');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGrantIntelligence = async (grant: Grant) => {
+    setIntelligenceLoading(true);
+    setIntelligence(null);
+    try {
+      const result = await apiService.grantIntelligence(
+        grant,
+        orgProfile.name ? orgProfile : undefined
+      );
+      setIntelligence(result);
+      toast.success('Djupanalys klar');
+    } catch {
+      toast.error('Kunde inte hämta djupanalys');
+    } finally {
+      setIntelligenceLoading(false);
     }
   };
 
@@ -345,8 +364,16 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
       </Tabs>
 
       {/* Grant Detail Dialog */}
-      <Dialog open={!!selectedGrant} onOpenChange={() => setSelectedGrant(null)}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <Dialog
+        open={!!selectedGrant}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedGrant(null);
+            setIntelligence(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           {selectedGrant && (
             <>
               <DialogHeader>
@@ -400,6 +427,106 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
                     Öppna utlysningen
                   </a>
                 )}
+
+                <div className="border rounded-xl p-4 bg-slate-50/80 space-y-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="font-semibold flex items-center gap-2">
+                      <Layers className="h-4 w-4 text-indigo-600" />
+                      Gräv djupare
+                    </h4>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={intelligenceLoading}
+                      onClick={() => handleGrantIntelligence(selectedGrant)}
+                    >
+                      {intelligenceLoading ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Analyserar…
+                        </>
+                      ) : (
+                        'Analysera utlysning'
+                      )}
+                    </Button>
+                  </div>
+
+                  {intelligenceLoading && (
+                    <p className="text-sm text-muted-foreground">
+                      Söker beviljade projekt, krav och tips via Exa + AI…
+                    </p>
+                  )}
+
+                  {intelligence && intelligence.grantName === selectedGrant.name && (
+                    <div className="space-y-4 text-sm">
+                      {intelligence.funderProfile && (
+                        <div>
+                          <p className="font-medium text-slate-800 mb-1">Om finansiären</p>
+                          <p className="text-muted-foreground">{intelligence.funderProfile}</p>
+                        </div>
+                      )}
+
+                      {intelligence.similarProjects?.length > 0 && (
+                        <div>
+                          <p className="font-medium text-slate-800 mb-2">Liknande beviljade projekt</p>
+                          <ul className="space-y-3">
+                            {intelligence.similarProjects.map((p, i) => (
+                              <li key={i} className="border-l-2 border-indigo-300 pl-3">
+                                <p className="font-medium">{p.projectName}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {p.organization}
+                                  {p.year ? ` · ${p.year}` : ''}
+                                  {p.amount ? ` · ${p.amount}` : ''}
+                                </p>
+                                <p className="text-muted-foreground mt-1">{p.summary}</p>
+                                {p.url && (
+                                  <a
+                                    href={p.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-indigo-600 text-xs inline-flex items-center gap-1 mt-1"
+                                  >
+                                    <ExternalLink className="h-3 w-3" />
+                                    Källa
+                                  </a>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {intelligence.eligibilityNotes && (
+                        <div>
+                          <p className="font-medium text-slate-800 mb-1">Krav & målgrupp</p>
+                          <p className="text-muted-foreground whitespace-pre-wrap">{intelligence.eligibilityNotes}</p>
+                        </div>
+                      )}
+
+                      {intelligence.applicationTips && (
+                        <div className="bg-green-50 p-3 rounded-lg">
+                          <p className="font-medium text-green-900 mb-1">Tips för ansökan</p>
+                          <p className="text-green-800 whitespace-pre-wrap">{intelligence.applicationTips}</p>
+                        </div>
+                      )}
+
+                      {intelligence.commonPitfalls && (
+                        <div className="bg-amber-50 p-3 rounded-lg">
+                          <p className="font-medium text-amber-900 mb-1">Vanliga misstag</p>
+                          <p className="text-amber-800 whitespace-pre-wrap">{intelligence.commonPitfalls}</p>
+                        </div>
+                      )}
+
+                      {intelligence.fitForOrg && (
+                        <div className="bg-blue-50 p-3 rounded-lg">
+                          <p className="font-medium text-blue-900 mb-1">Passar er organisation?</p>
+                          <p className="text-blue-800 whitespace-pre-wrap">{intelligence.fitForOrg}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex gap-3 pt-4">
                   <Button
