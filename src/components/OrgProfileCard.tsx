@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { PROFILE_PRESETS } from '@/data/profilePresets';
 import type { OrgProfile } from '@/types';
 import { Building2, ChevronDown, ChevronUp, User, Users, Pencil, CheckCircle2 } from 'lucide-react';
 
@@ -74,6 +75,17 @@ export function OrgProfileCard({ profile, onChange }: OrgProfileCardProps) {
     handleChange('partnerships', val.split(',').map(s => s.trim()).filter(Boolean));
   };
 
+  const loadPreset = (presetId: string) => {
+    const preset = PROFILE_PRESETS.find(p => p.id === presetId);
+    if (!preset) return;
+    const loaded = { ...preset.profile };
+    setOrgType((loaded.orgType as OrgType) || 'Företag');
+    setOrgNr(loaded.orgNr || '');
+    saveProfile(loaded);
+    onChange(loaded);
+    setExpanded(true);
+  };
+
   if (!expanded) {
     return (
       <div
@@ -121,6 +133,22 @@ export function OrgProfileCard({ profile, onChange }: OrgProfileCardProps) {
         <p className="text-xs text-muted-foreground">
           Fyll i uppgifterna så anpassas anslagen och ansökningarna automatiskt.
         </p>
+        {PROFILE_PRESETS.length > 0 && (
+          <div className="flex flex-wrap gap-2 pt-1">
+            {PROFILE_PRESETS.map(preset => (
+              <Button
+                key={preset.id}
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => loadPreset(preset.id)}
+              >
+                Ladda: {preset.label}
+              </Button>
+            ))}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -180,8 +208,8 @@ export function OrgProfileCard({ profile, onChange }: OrgProfileCardProps) {
             placeholder="Beskriv kort vad ni gör, t.ex. 'Vi är en IT-förening som arrangerar kurser och events i Sandviken...'"
             value={profile.description}
             onChange={e => handleChange('description', e.target.value)}
-            rows={2}
-            className="text-sm resize-none"
+            rows={5}
+            className="text-sm resize-y min-h-[100px]"
           />
         </div>
 

@@ -50,37 +50,48 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
   const [researchSteps, setResearchSteps] = useState<string[]>([]);
   const [intelligence, setIntelligence] = useState<GrantIntelligence | null>(null);
   const [intelligenceLoading, setIntelligenceLoading] = useState(false);
+  const [apiOnline, setApiOnline] = useState<boolean | null>(null);
 
-  // Load grants on mount (useEffect, not useState — fixes re-render side-effect bug)
   useEffect(() => {
     const savedGrants = apiService.loadDiscoveredGrants();
     if (savedGrants.length > 0) {
       setGrants(savedGrants);
-    } else {
-      const mocks = apiService.getMockGrants();
-      setGrants(mocks);
-      apiService.saveDiscoveredGrants(mocks);
     }
+    apiService.checkHealth()
+      .then(h => setApiOnline(h.status === 'ok' || h.status === 'degraded'))
+      .catch(() => setApiOnline(false));
   }, []);
 
   const handleSearch = async () => {
+    if (!searchQuery.trim() && !orgProfile.description?.trim()) {
+      toast.error('Skriv ett sökord eller fyll i verksamhetsbeskrivning i profilen');
+      return;
+    }
     setLoading(true);
+    setDeepSearchSynthesis(null);
     try {
-      const results = await apiService.searchGrants(searchQuery, filters, false, orgProfile.name ? orgProfile : undefined);
-      // Merge results with existing grants, avoiding duplicates by ID
-      setGrants(prev => {
-        const existingIds = new Set(prev.map(g => g.id));
-        const newUniqueResults = results.filter(g => !existingIds.has(g.id));
-        const updated = [...prev, ...newUniqueResults];
-        apiService.saveDiscoveredGrants(updated);
-        return updated;
-      });
-      toast.success(`Hittade ${results.length} utlysningar`);
-    } catch {
-      toast.error('Kunde inte söka utlysningar');
+      const results = await apiService.searchGrants(
+        searchQuery,
+        filters,
+        false,
+        orgProfile.name || orgProfile.description ? orgProfile : undefined
+      );
+      setGrants(results);
+      apiService.saveDiscoveredGrants(results);
+      toast.success(`Hittade ${results.length} utlysningar (live-sökning)`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Kunde inte söka utlysningar';
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleClearSaved = () => {
+    apiService.clearDiscoveredGrants();
+    setGrants([]);
+    setDeepSearchSynthesis(null);
+    toast.message('Sparade utlysningar rensade');
   };
 
   const handleGrantIntelligence = async (grant: Grant) => {
@@ -116,20 +127,20 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
         toast.success('Djupsökning slutförd');
 
         // Try to parse the synthesis for grants
-        const parsedGrants = await apiService.searchGrants(searchQuery, filters, true, orgProfile.name ? orgProfile : undefined);
+        const parsedGrants = await apiService.searchGrants(
+          searchQuery,
+          filters,
+          true,
+          orgProfile.name || orgProfile.description ? orgProfile : undefined
+        );
         if (parsedGrants.length > 0) {
-          setGrants(prev => {
-            const existingIds = new Set(prev.map(g => g.id));
-            const newUniqueResults = parsedGrants.filter(g => !existingIds.has(g.id));
-            const updated = [...prev, ...newUniqueResults];
-            apiService.saveDiscoveredGrants(updated);
-            return updated;
-          });
+          setGrants(parsedGrants);
+          apiService.saveDiscoveredGrants(parsedGrants);
         }
       }
-    } catch {
-      toast.error('Djupsökning misslyckades');
-      handleSearch(); // Fallback
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Djupsökning misslyckades';
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -149,9 +160,17 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
 
         <div className="relative z-10">
           <h2 className="text-2xl md:text-3xl font-bold mb-2 tracking-tight">Hitta rätt finansiering</h2>
-          <p className="text-blue-100 mb-6 max-w-2xl font-medium">
+          <p className="text-blue-100 mb-2 max-w-2xl font-medium">
             Sök bland aktuella utlysningar från Vinnova, Tillväxtverket, EU och andra finansiärer med hjälp av AI-driven analys.
           </p>
+          {apiOnline === false && (
+            <p className="text-amber-100 text-sm mb-4">
+              API ej nåbart — kör <code className="bg-white/10 px-1 rounded">npm run dev:all</code> lokalt eller kontrollera Vercel-env (OPENROUTER_API_KEY, EXA_API_KEY).
+            </p>
+          )}
+          {apiOnline === true && (
+            <p className="text-blue-200/80 text-xs mb-4">Live-sökning via Exa + OpenRouter</p>
+          )}
 
           <div className="flex flex-col md:flex-row gap-4">
             <div className="flex-1 relative group">
@@ -177,6 +196,17 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
                   </div>
                 ) : 'Sök'}
               </Button>
+              {grants.length > 0 && (
+                <Button
+                  type="button"
+                  onClick={handleClearSaved}
+                  disabled={loading}
+                  variant="secondary"
+                  className="bg-white/10 text-white hover:bg-white/20 h-12 px-4 border border-white/20 rounded-xl text-sm"
+                >
+                  Rensa lista
+                </Button>
+              )}
               <Button
                 onClick={handleDeepSearch}
                 disabled={loading}

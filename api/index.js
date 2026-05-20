@@ -60,6 +60,32 @@ const FUNDING_ENTITIES = [
     region: 'Gävleborg',
   },
   {
+    id: 'twistedstacks',
+    name: 'TwistedStacks',
+    orgNr: process.env.ENTITY_TWISTEDSTACKS_ORGNR || '',
+    phone: process.env.ENTITY_TWISTEDSTACKS_PHONE || '',
+    type: 'company',
+    description:
+      'AI-driven produktstudio som utvecklar specialiserad mjukvara för SME, rådgivare och regional utveckling — portfölj inkl. SkatteRevision, AnslagSITK, LAGA och EnergiRevision. Enskild firma, AB planeras.',
+    focusAreas: [
+      'AI och beslutsstöd',
+      'SME-digitalisering',
+      'Skatte- och redovisningstech',
+      'Legal tech',
+      'Energi och klimat',
+      'Innovationsfinansiering',
+    ],
+    strengths: [
+      'Multi-agent AI',
+      'Öppen myndighetsdata',
+      'Domänkunskap skatt/energi/juridik',
+      'Produktportfölj',
+      'Spårbar analys',
+    ],
+    partnerships: ['Sandvikens IT-Kår'],
+    region: 'Gävleborg',
+  },
+  {
     id: 'horizonten',
     name: 'Horizonten Holding',
     orgNr: process.env.ENTITY_HORIZONTEN_ORGNR || '',
@@ -466,29 +492,109 @@ app.get('/api/auth/me', (req, res) => {
   }
 });
 
+const GRANT_OUTPUT_FORMAT = `
+## [Namn på utlysningen]
+- **Finansiär**: [Namn]
+- **Deadline**: [Datum YYYY-MM-DD eller Löpande]
+- **Maxbelopp**: [Summa]
+- **Beskrivning**: [2-3 meningar]
+- **Relevans**: [Varför passar detta sökande?]
+- **URL**: [https://...]`;
+
+function buildOrgSearchContext(orgProfile) {
+  const orgName = orgProfile?.name || 'sökande organisation';
+  const orgDesc = orgProfile?.description || '';
+  const focus = (orgProfile?.focusAreas || []).join(', ');
+  const region = orgProfile?.region || 'Sverige';
+  return { orgName, orgDesc, focus, region };
+}
+
+/** Exa + LLM — delad pipeline för sök, deep search och discovery */
+async function runGrantSearchPipeline({ query, orgProfile, filters, maxExaSteps = 2, taskId = null }) {
+  const { orgName, orgDesc, focus, region } = buildOrgSearchContext(orgProfile);
+  const userQuery = (query || '').trim() || orgDesc || 'innovationsstöd SME digitalisering Sverige 2026';
+  const categoryHint = filters?.category ? ` Kategori: ${filters.category}.` : '';
+
+  const planPrompt = `Du planerar webbsökning efter svenska utlysningar och finansiering (2025-2026).
+Organisation: ${orgName}
+Beskrivning: ${orgDesc}
+Fokus: ${focus}
+Region: ${region}
+Sökämne: "${userQuery}"${categoryHint}
+
+Returnera ENDAST en JSON-array med ${maxExaSteps} korta söksträngar (svenska) riktade mot vinnova.se, tillvaxtverket.se, region.se, europa.eu m.fl.
+Exempel: ["Vinnova utlysning AI SME 2026", "Tillväxtverket digitalisering Gävleborg bidrag"]
+Svar:`;
+
+  let searchSteps = [];
+  try {
+    const planText = await generateWithFallback(planPrompt, 'reason');
+    const jsonMatch = planText.match(/\[[\s\S]*\]/);
+    searchSteps = JSON.parse(jsonMatch ? jsonMatch[0] : planText);
+    searchSteps = searchSteps
+      .map(s => (typeof s === 'string' ? s : s.query || s.sökterm || JSON.stringify(s)))
+      .filter(Boolean)
+      .slice(0, maxExaSteps);
+  } catch {
+    searchSteps = [
+      `Vinnova utlysning ${userQuery} 2026`,
+      `Tillväxtverket bidrag ${region} ${userQuery}`,
+    ].slice(0, maxExaSteps);
+  }
+
+  const exaResults = [];
+  for (const step of searchSteps) {
+    try {
+      const result = await runExaSearch(String(step), taskId);
+      exaResults.push({ step, output: result.output?.substring(0, 3500) || '' });
+    } catch (err) {
+      exaResults.push({ step, output: '', error: err.message });
+    }
+  }
+
+  const synthesisPrompt = `Du är expert på svenska anslag. Hjälp "${orgName}" hitta VERKLIGA, aktuella utlysningar.
+${orgDesc ? `Verksamhet: ${orgDesc}` : ''}
+${focus ? `Fokus: ${focus}` : ''}
+Sökämne: "${userQuery}"
+
+Rådata från webbsökning:
+${JSON.stringify(exaResults, null, 1)}
+
+Regler:
+- Lista 5-10 utlysningar om underlaget räcker; annars färre men ärligt.
+- Varje post MÅSTE ha en giltig https-URL från rådatan eller känd myndighetssida.
+- Hitta inte på utlysningar som inte stöds av källorna.
+- Skriv på svenska.
+
+Använd EXAKT detta format per utlysning:
+${GRANT_OUTPUT_FORMAT}`;
+
+  const output = await generateWithFallback(synthesisPrompt, 'pro');
+  return { output, searchSteps, usedExa: !!EXA_API_KEY };
+}
+
 app.post('/api/search-grants', async (req, res) => {
   try {
     const { query, filters, orgProfile } = req.body;
-    const orgName = orgProfile?.name || 'Vår organisation';
-    const orgDesc = orgProfile?.description || '';
+    const { output, usedExa } = await runGrantSearchPipeline({
+      query,
+      orgProfile,
+      filters,
+      maxExaSteps: EXA_API_KEY ? 2 : 0,
+    });
 
-    const prompt = `Du är en assistent som hittar riskkapital, forskningsanslag och projektmedel för: ${orgName} - ${orgDesc}.
-Sök efter utlysningar och riskkapital relaterade till: "${query}"
-${filters?.category ? `Kategori: ${filters.category}` : ''}
+    if (!EXA_API_KEY) {
+      const { orgName } = buildOrgSearchContext(orgProfile);
+      const fallback = await generateWithFallback(
+        `Lista 5-8 aktuella svenska utlysningar för ${orgName} relaterade till: "${query || orgProfile?.description}".${GRANT_OUTPUT_FORMAT}`,
+        'pro'
+      );
+      return res.json({ output: fallback, source: 'llm-only', warning: 'EXA_API_KEY saknas — resultat kan vara inaktuella' });
+    }
 
-Returnera 3-5 relevanta utlysningar i detta exakta format:
-
-## [Namn på utlysningen]
-- **Finansiär**: [Namn]
-- **Deadline**: [Datum]
-- **Maxbelopp**: [Summa]
-- **Beskrivning**: [Kort beskrivning]
-- **Relevans**: [Varför passar detta ${orgName}?]
-- **URL**: [https://...]`;
-
-    const text = await generateWithFallback(prompt, 'pro');
-    res.json({ output: text });
+    res.json({ output, source: usedExa ? 'exa+llm' : 'llm-only' });
   } catch (error) {
+    console.error('search-grants:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -596,39 +702,32 @@ app.get('/api/discovery-status/:taskId', (req, res) => {
 app.post('/api/deep-search', async (req, res) => {
   try {
     const { query, orgProfile } = req.body;
-    const planPrompt = `Skapa 3 söksträng-fraser för webbsökning om: "${query}".
-Returnera ENDAST en JSON-array med 3 korta söksträngar (plain text, inte objekt).
-Exempel: ["Vinnova FoU-stöd AI 2026", "Tillväxtverket startup bidrag Gävleborg", "EU Horisont innovation skatteåtervinning"]
-Svar:`;
-    const planText = await generateWithFallback(planPrompt, 'reason');
+    const { output, searchSteps } = await runGrantSearchPipeline({
+      query,
+      orgProfile,
+      maxExaSteps: EXA_API_KEY ? 3 : 0,
+    });
 
-    let searchSteps = [];
-    try {
-      const jsonMatch = planText.match(/\[[\s\S]*\]/);
-      searchSteps = JSON.parse(jsonMatch ? jsonMatch[0] : planText);
-      searchSteps = searchSteps.map(s =>
-        typeof s === 'string' ? s : (s.sökterm || s.instruktion || s.query || s.step || JSON.stringify(s))
+    if (!EXA_API_KEY) {
+      const synthesisText = await generateWithFallback(
+        `Djupanalys av utlysningar för: "${query}".${GRANT_OUTPUT_FORMAT}`,
+        'pro'
       );
-    } catch (e) {
-      searchSteps = [query];
+      return res.json({
+        success: true,
+        plan: [query],
+        rawResults: [],
+        synthesis: synthesisText,
+        warning: 'EXA_API_KEY saknas',
+      });
     }
 
-    const results = [];
-    for (const step of searchSteps.slice(0, 3)) {
-      try {
-        const result = await runExaSearch(String(step));
-        results.push({ step, output: result.output?.substring(0, 2000) || 'Inga resultat' });
-      } catch (err) {
-        results.push({ step, output: '', error: err.message });
-      }
-    }
-
-    const synthesisPrompt = `Sammanställ sökresultaten om: "${query}"
-${JSON.stringify(results)}
-Formatera som ## [Namn] lista med tydliga leads. Skriv på svenska. Inkludera deadlines och URLer.`;
-    const synthesisText = await generateWithFallback(synthesisPrompt, 'pro');
-
-    res.json({ success: true, plan: searchSteps, rawResults: results, synthesis: synthesisText });
+    res.json({
+      success: true,
+      plan: searchSteps,
+      rawResults: [],
+      synthesis: output,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -859,14 +958,17 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-const server = app.listen(PORT, () => {
-  const activeZones = LLM_ZONES.filter(z => z.client).length;
-  console.log(`✅ AnslagSITK backend på port ${PORT}`);
-  console.log(`🔵 OpenRouter: ${activeZones}/${LLM_ZONES.length} zoner (${usesSharedKeyOnly ? 'delad nyckel' : 'multi-key'})`);
-  if (activeZones === 0) console.warn('⚠ VARNING: Ingen OpenRouter API-nyckel konfigurerad!');
-  console.log(`🏢 Entiteter: ${FUNDING_ENTITIES.map(e => e.name).join(', ')}`);
-  console.log(`📂 GitHub Archive: ${ARCHIVE_PATH} (${fs.existsSync(ARCHIVE_PATH) ? 'hittad' : 'saknas'})`);
-  console.log(`🔍 Search: ${EXA_API_KEY ? 'Exa live search' : 'LLM fallback (no Exa key)'}`);
-});
+// Lokalt: starta server. Vercel: export-only (ingen listen)
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    const activeZones = LLM_ZONES.filter(z => z.client).length;
+    console.log(`✅ AnslagSITK backend på port ${PORT}`);
+    console.log(`🔵 OpenRouter: ${activeZones}/${LLM_ZONES.length} zoner (${usesSharedKeyOnly ? 'delad nyckel' : 'multi-key'})`);
+    if (activeZones === 0) console.warn('⚠ VARNING: Ingen OpenRouter API-nyckel konfigurerad!');
+    console.log(`🏢 Entiteter: ${FUNDING_ENTITIES.map(e => e.name).join(', ')}`);
+    console.log(`📂 GitHub Archive: ${ARCHIVE_PATH} (${fs.existsSync(ARCHIVE_PATH) ? 'hittad' : 'saknas'})`);
+    console.log(`🔍 Search: ${EXA_API_KEY ? 'Exa live search' : 'LLM fallback (no Exa key)'}`);
+  });
+}
 
 export default app;

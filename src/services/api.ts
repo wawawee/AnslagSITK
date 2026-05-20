@@ -35,31 +35,33 @@ class ApiService {
   }
 
   async searchGrants(query: string, filters?: SearchFilters, useDeepSearch: boolean = false, orgProfile?: OrgProfile): Promise<Grant[]> {
-    try {
-      if (useDeepSearch) {
-        const deepResult = await this.deepSearch(query, orgProfile);
-        const parsedGrants = this.parseGrantsFromOutput(deepResult.synthesis);
-        if (parsedGrants.length > 0 && !parsedGrants[0].id.includes('mock')) {
-          return parsedGrants;
-        }
-        return this.getMockGrants();
-      }
-
-      const result = await this.fetch<unknown>('/api/search-grants', {
-        method: 'POST',
-        body: JSON.stringify({ query, filters, orgProfile }),
-      });
-
-      if (typeof result === 'object' && result !== null && 'output' in result) {
-        const raw = (result as { output?: string }).output;
-        if (raw) return this.parseGrantsFromOutput(raw);
-      }
-
-      return Array.isArray(result) ? (result as Grant[]) : this.getMockGrants();
-    } catch (error) {
-      console.error('Search grants error:', error);
-      return this.getMockGrants();
+    if (useDeepSearch) {
+      const deepResult = await this.deepSearch(query, orgProfile);
+      return this.parseGrantsFromOutput(deepResult.synthesis);
     }
+
+    const result = await this.fetch<{ output?: string; warning?: string }>('/api/search-grants', {
+      method: 'POST',
+      body: JSON.stringify({ query, filters, orgProfile }),
+    });
+
+    if (result.warning) {
+      console.warn('[AnslagSITK]', result.warning);
+    }
+
+    if (result.output) {
+      const grants = this.parseGrantsFromOutput(result.output);
+      if (grants.length === 0) {
+        throw new Error('Sökningen gav inga parsbara utlysningar — prova Deep Search eller annat sökord');
+      }
+      return grants;
+    }
+
+    throw new Error('Tomt svar från API');
+  }
+
+  async checkHealth(): Promise<{ status: string; search?: string }> {
+    return this.fetch('/api/health');
   }
 
   async discoverMoreGrants(
@@ -147,7 +149,12 @@ class ApiService {
 
   loadDiscoveredGrants(): Grant[] {
     const saved = localStorage.getItem('sitk-discovered-grants');
-    return saved ? JSON.parse(saved) : [];
+    const grants: Grant[] = saved ? JSON.parse(saved) : [];
+    return grants.filter(g => !g.id?.startsWith('mock-'));
+  }
+
+  clearDiscoveredGrants(): void {
+    localStorage.removeItem('sitk-discovered-grants');
   }
 
   private parseGrantsFromOutput(output: string): Grant[] {
@@ -219,22 +226,6 @@ class ApiService {
     }
 
     return grants;
-  }
-
-  public getMockGrants(): Grant[] {
-    return [
-      {
-        id: 'mock-1',
-        name: 'Riskkapital & AI-innovation 2026',
-        funder: 'Tech Fund',
-        deadline: 'Löpande',
-        maxAmount: '10 000 000 kr',
-        description: 'Exempelanslag för att demonstrera plattformen.',
-        url: 'https://example.com',
-        category: 'other',
-        status: 'open',
-      }
-    ];
   }
 
   // --- Entity Endpoints ---
