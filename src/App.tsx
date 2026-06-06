@@ -1,4 +1,3 @@
-import { Login } from '@/components/Login';
 import { loadStoredProfile } from '@/components/OrgProfileCard';
 import { Toaster } from '@/components/ui/sonner';
 import { AgentIntelligence } from '@/sections/AgentIntelligence';
@@ -21,9 +20,6 @@ const defaultOrgProfile: OrgProfile = {
 };
 
 function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
-    return localStorage.getItem('sitk-admin-auth') === 'true';
-  });
   const [activeTab, setActiveTab] = useState('search');
   const [selectedGrant, setSelectedGrant] = useState<Grant | null>(null);
   const [orgProfile, setOrgProfile] = useState<OrgProfile>(() => {
@@ -41,25 +37,11 @@ function App() {
     setActiveTab('writer');
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('sitk-admin-auth');
-    setIsLoggedIn(false);
-  };
-
-  if (!isLoggedIn) {
-    return (
-      <>
-        <Toaster position="top-right" richColors />
-        <Login onLogin={() => setIsLoggedIn(true)} />
-      </>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-background">
       <Toaster position="top-right" richColors />
 
-      <Header activeTab={activeTab} onTabChange={setActiveTab} onLogout={handleLogout} />
+      <Header activeTab={activeTab} onTabChange={setActiveTab} />
 
       <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === 'search' && (
@@ -91,14 +73,14 @@ function App() {
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             <div className="text-center md:text-left">
-              <p className="font-semibold">SITK Agent</p>
+              <p className="font-semibold">ANSLAG</p>
               <p className="text-sm text-muted-foreground">
-                AI-driven ansökningshjälp för Sandvikens IT Kår
+                AI-driven hjälp för bidrag, anslag och projektansökningar
               </p>
             </div>
             <div className="text-sm text-muted-foreground">
               <p>Powered by Browser Use API</p>
-              <p>© 2026 SITK - Sandvikens IT Kår</p>
+              <p>© 2026 TWISTEDSTACKS</p>
             </div>
           </div>
         </div>

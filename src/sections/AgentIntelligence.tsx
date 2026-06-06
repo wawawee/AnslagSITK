@@ -81,8 +81,8 @@ export const AgentIntelligence: React.FC = () => {
     } catch (error) {
        console.error('Failed to fetch logs:', error);
        setLogs([
-         { timestamp: new Date().toLocaleTimeString(), message: "SITK Agent initialized with Modern Folder Standard" },
-         { timestamp: new Date().toLocaleTimeString(), message: "Connected to Qdrant Cloud (Health: Green)" }
+         { timestamp: new Date().toLocaleTimeString(), message: "ANSLAG initialized with Modern Folder Standard" },
+         { timestamp: new Date().toLocaleTimeString(), message: "Grant intelligence engine ready" }
        ]);
     } finally {
       setLoading(false);

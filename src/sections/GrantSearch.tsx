@@ -569,7 +569,7 @@ export function GrantSearch({ onSelectGrant, orgProfile, onOrgProfileChange }: G
 
                 {selectedGrant.relevance && (
                   <div className="bg-blue-50 p-4 rounded-lg">
-                    <h4 className="font-semibold mb-2 text-blue-900">Varför passar detta SITK?</h4>
+                    <h4 className="font-semibold mb-2 text-blue-900">Varför passar detta projektet?</h4>
                     <p className="text-sm text-blue-800">{selectedGrant.relevance}</p>
                   </div>
                 )}

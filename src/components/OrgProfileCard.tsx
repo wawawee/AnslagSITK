@@ -156,7 +156,7 @@ export function OrgProfileCard({ profile, onChange }: OrgProfileCardProps) {
             <Label htmlFor="org-name" className="text-xs">Namn *</Label>
             <Input
               id="org-name"
-              placeholder="t.ex. Sandvikens IT Kår"
+              placeholder="t.ex. lokal förening, startup eller projektgrupp"
               value={profile.name}
               onChange={e => handleChange('name', e.target.value)}
               className="h-8 text-sm"

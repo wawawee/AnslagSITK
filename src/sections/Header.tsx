@@ -5,7 +5,6 @@ import { useState } from 'react';
 interface HeaderProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
-  onLogout: () => void;
 }
 
 const navItems = [
@@ -16,7 +15,7 @@ const navItems = [
   { id: 'models', label: 'AI-modeller', icon: 'Sparkles' },
 ];
 
-export function Header({ activeTab, onTabChange, onLogout }: HeaderProps) {
+export function Header({ activeTab, onTabChange }: HeaderProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
@@ -29,8 +28,8 @@ export function Header({ activeTab, onTabChange, onLogout }: HeaderProps) {
               <Brain className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold gradient-text">SITK Agent</h1>
-              <p className="text-xs text-muted-foreground">AI för ansökningshjälp</p>
+              <h1 className="text-xl font-bold gradient-text">ANSLAG</h1>
+              <p className="text-xs text-muted-foreground">AI för bidrag och ansökningar</p>
             </div>
           </div>
 
@@ -47,15 +46,6 @@ export function Header({ activeTab, onTabChange, onLogout }: HeaderProps) {
                 {item.label}
               </Button>
             ))}
-            <div className="w-px h-6 bg-border mx-2" />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onLogout}
-              className="text-muted-foreground hover:text-red-400 hover:bg-red-400/10"
-            >
-              Logga ut
-            </Button>
           </nav>
 
           {/* Mobile Menu Button */}
@@ -87,15 +77,6 @@ export function Header({ activeTab, onTabChange, onLogout }: HeaderProps) {
                   {item.label}
                 </Button>
               ))}
-              <div className="h-px bg-border my-2" />
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onLogout}
-                className="justify-start text-red-400 hover:bg-red-400/10"
-              >
-                Logga ut
-              </Button>
             </div>
           </nav>
         )}

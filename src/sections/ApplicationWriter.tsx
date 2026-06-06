@@ -18,8 +18,8 @@ interface ApplicationWriterProps {
 }
 
 const defaultOrgProfile: OrgProfile = {
-  name: 'SITK (Sandvikens IT Kår) / AI Startup',
-  description: 'Vi utvecklar AI-lösningar för att effektivisera verksamheter och skapa värde.',
+  name: 'Projekt / organisation',
+  description: 'Vi utvecklar ett praktiskt projekt som behöver finansiering för att skapa mätbar nytta.',
   focusAreas: [
     'AI för effektivisering',
     'Offentliga enheter och näringsliv'
