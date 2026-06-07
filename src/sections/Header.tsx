@@ -28,8 +28,8 @@ export function Header({ activeTab, onTabChange }: HeaderProps) {
               <Brain className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold gradient-text">ANSLAG</h1>
-              <p className="text-xs text-muted-foreground">AI för bidrag och ansökningar</p>
+              <h1 className="text-xl font-bold gradient-text">TWISTED+Anslag</h1>
+              <p className="text-xs text-muted-foreground">Gratis ansökningshjälp</p>
             </div>
           </div>
 
@@ -46,6 +46,10 @@ export function Header({ activeTab, onTabChange }: HeaderProps) {
                 {item.label}
               </Button>
             ))}
+            <div className="w-px h-6 bg-border mx-2" />
+            <Button variant="ghost" size="sm" asChild>
+              <a href="https://www.twistedstacks.com/">Showroom</a>
+            </Button>
           </nav>
 
           {/* Mobile Menu Button */}
@@ -77,6 +81,10 @@ export function Header({ activeTab, onTabChange }: HeaderProps) {
                   {item.label}
                 </Button>
               ))}
+              <div className="h-px bg-border my-2" />
+              <Button variant="ghost" size="sm" asChild className="justify-start">
+                <a href="https://www.twistedstacks.com/">Showroom</a>
+              </Button>
             </div>
           </nav>
         )}

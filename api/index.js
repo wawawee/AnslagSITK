@@ -122,7 +122,7 @@ const mkOpenRouterClient = (key) => {
     apiKey: key,
     defaultHeaders: {
       'HTTP-Referer': 'https://sitk.se',
-      'X-OpenRouter-Title': 'AnslagSITK',
+      'X-OpenRouter-Title': 'TWISTED+Anslag',
     },
   });
 };

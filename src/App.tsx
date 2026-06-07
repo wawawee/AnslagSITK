@@ -73,14 +73,18 @@ function App() {
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             <div className="text-center md:text-left">
-              <p className="font-semibold">ANSLAG</p>
+              <p className="font-semibold">TWISTED+Anslag</p>
               <p className="text-sm text-muted-foreground">
-                AI-driven hjälp för bidrag, anslag och projektansökningar
+                Gratis ansökningshjälp — hitta utlysningar och skriv utkast
               </p>
             </div>
-            <div className="text-sm text-muted-foreground">
-              <p>Powered by Browser Use API</p>
-              <p>© 2026 TWISTEDSTACKS</p>
+            <div className="text-sm text-muted-foreground text-center md:text-right">
+              <p>
+                <a href="https://www.twistedstacks.com/" className="hover:text-foreground underline-offset-4 hover:underline">
+                  TwistedStacks showroom
+                </a>
+              </p>
+              <p>© 2026 TwistedStacks</p>
             </div>
           </div>
         </div>
